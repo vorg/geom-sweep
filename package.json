@@ -1,0 +1,32 @@
+{
+  "name": "geom-sweep",
+  "version": "1.0.0",
+  "description": "Extrudes a shape along a path",
+  "main": "index.js",
+  "license": "MIT",
+  "author": {
+    "name": "Marcin Ignac",
+    "email": "marcin.ignac@gmail.com",
+    "url": "https://github.com/vorg"
+  },
+  "dependencies": {
+    "pex-math": "^2.0.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "node test.js"
+  },
+  "keywords": [
+    "geometry",
+    "pex",
+    "webgl"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/vorg/geom-sweep.git"
+  },
+  "homepage": "https://github.com/vorg/geom-sweep",
+  "bugs": {
+    "url": "https://github.com/vorg/geom-sweep/issues"
+  }
+}
