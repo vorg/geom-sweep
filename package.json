@@ -1,6 +1,6 @@
 {
   "name": "geom-sweep",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Extrudes a shape along a path",
   "main": "index.js",
   "license": "MIT",
