@@ -34,7 +34,6 @@ function sweep (path, shapePath, options) {
       }
     }
   })
-  console.log('tangents', tangents[0], tangents[path.length - 1])
   const frames = makeFrames(path, tangents, isClosed)
   const g = buildGeometry(frames, shapePath, options.caps, options.radius, isClosed)
   g.debugLines = []
@@ -119,7 +118,6 @@ function makeFrames (points, tangents, closed, rot) {
     const firstNormal = frames[0].normal
     const lastNormal = frames[frames.length - 1].normal
     theta = Math.acos(clamp(vec3.dot(firstNormal, lastNormal), 0, 1))
-    console.log('theta', toDegrees(theta))
     theta /= frames.length - 1
     if (vec3.dot(tangents[0], vec3.cross(vec3.copy(firstNormal), lastNormal)) > 0) {
       // theta = -theta
