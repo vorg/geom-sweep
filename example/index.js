@@ -1,6 +1,5 @@
 'use strict'
 const gl = require('pex-gl')()
-const regl = require('regl')(gl)
 const Mat4 = require('pex-math/Mat4')
 const glsl = require('glslify')
 const splitVertices = require('geom-split-vertices')
@@ -13,24 +12,24 @@ const camera = require('pex-cam/perspective')({
   position: [0, 0, 4]
 })
 require('pex-cam/orbiter')({ camera: camera })
-const createLoft = require('../')
+const sweep = require('../')
 const computeNormals = require('angle-normals')
 const triangulate = require('geom-triangulate')
 const splinePoints = require('../../spline-points')
+var regl = require('regl')()
 
 const modelMatrix = Mat4.create()
 
-const shape = [[-1, -1], [1, -1], [1, 1], [-1, 1]]
+let shape = [[-1, -1, 0], [1, -1, 0], [1, 1, 0], [-1, 1, 0]]
+// shape = splinePoints(shape, { segmentLength: 0.1, closed: true })
 // const shape = [
   // [-1, -1], [0, -1], [0, -0.5], [1, -0.5],
   // [1, 0.5], [0, 0.5], [0, 1], [-1, 1]
 // ]
-
-const path = []
+let path = []
 for (var i = 0; i < 10; i++) {
   path.push([0.3 * Math.sin(i / 10 * 4 * Math.PI), 2 * (i / 10 - 0.5), 0.3 * Math.cos(i / 10 * 4 * Math.PI)])
 }
-
 
 var n = 64
 path.length = 0
@@ -43,20 +42,22 @@ for (var i = 0; i < n; i++) {
   path.push([x * s, y * s, z * s])
 }
 
-const smoothPath = splinePoints(path, { segmentLength: 1 / 5, closed: true })
+// path.push(path[0])
+const smoothPath = splinePoints(path, { segmentLength: 1 / 10, closed: true })
 // let radius = smoothPath.map((p, i, points) => [ 0.08 + 0.07 * Math.sin(i / points.length * Math.PI * 4), 0.05])
 
 // let g = createLoft(smoothPath, shape, { caps: true, radius: radius })
-let g = createLoft(path, shape, { radius: 0.1, closed: true })
-// let g = createLoft(smoothPath, shape, { radius: 0.1, closed: true })
+// let g = sweep(path, shape, { radius: 0.1, closed: false })
+let g = sweep(smoothPath, shape, { radius: 0.1, closed: true })
 g.cells = triangulate(g.cells)
 
 const line = {
   positions: g.debugLines
 }
 
-// g = splitVertices(g)
-// g.normals = normals(g.positions, g.cells)
+g = splitVertices(g)
+g.normals = normals(g.positions, g.cells)
+g.uvs = g.normals.map(() => [0, 0])
 
 const drawMesh = regl({
   attributes: {
@@ -103,7 +104,7 @@ const drawMesh = regl({
 
     void main () {
       gl_FragColor.rgb = vNormal * 0.5 + 0.5;
-      gl_FragColor.rgb = vec3(vTexCoord.xy, 0.0);
+      // gl_FragColor.rgb = vec3(vTexCoord.xy, 0.0);
       // gl_FragColor = vec4(1.0, 1.0, 0.0, 1.0);
       gl_FragColor.a = 1.0;
     }

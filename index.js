@@ -3,7 +3,6 @@ const mat4 = require('pex-math/mat4')
 const quat = require('pex-math/quat')
 const clamp = require('pex-math/utils').clamp
 const toDegrees = require('pex-math/utils').toDegrees
-
 var EPSILON = 0.00001
 
 // ### Loft ( path, options)
@@ -16,7 +15,7 @@ var EPSILON = 0.00001
 //  - `xShapeScale` - distorion scale along extruded shape x axis *{ Number = 1 }*
 //  - `caps` - generate ending caps geometry *{ bool = false }*
 //  - `initialNormal` - starting frame normal *{ vec3 = null }*
-function createLoft (path, shapePath, options) {
+function sweep (path, shapePath, options) {
   options = options || { }
 
   const dist = vec3.distance(path[0], path[path.length - 1])
@@ -90,6 +89,7 @@ function makeFrames (points, tangents, closed, rot) {
       if (vec3.length(v) > EPSILON) {
         vec3.normalize(v)
         theta = Math.acos(vec3.dot(prevTangent, tangent))
+        theta 
         quat.setAxisAngle(rotation, v, theta)
         vec3.multQuat(normal, rotation)
       }
@@ -191,12 +191,17 @@ function buildGeometry (frames, shapePath, caps, radius, isClosed) {
     }
     index += numSegments
   }
-  // if (this.path.isClosed()) {
-    // index -= numSegments
-    // for (j=0; j<numSegments; j++) {
-      // this.faces.push([(j + 1) % numSegments, index + (j + 1) % numSegments, index + j, j])
-    // }
-  // }
+  if (isClosed) {
+    index -= numSegments
+    for (var j = 0; j < numSegments; j++) {
+      cells.push([
+        index + (j + 1) % numSegments + numSegments,
+        index + (j + 1) % numSegments,
+        index + j,
+        index + j + numSegments
+      ].map((i) => i % positions.length))
+    }
+  }
   if (caps) {
     for (let j = 0; j < numSegments; j++) {
       cells.push([j, (j + 1) % numSegments, positions.length - 2])
@@ -212,4 +217,4 @@ function buildGeometry (frames, shapePath, caps, radius, isClosed) {
   }
 }
 
-module.exports = createLoft
+module.exports = sweep
