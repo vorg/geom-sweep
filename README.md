@@ -17,11 +17,11 @@ var g = sweep(path, shape, opts)
 
 - `path` - array of [x, y, z] positions defining the path to extrude along
 - `shape` - array of [x, y, z] positions defining the swept shape
-- `options`
-- `opyiond.radius` - extruded geometry radius (default 1)
-- `options.closed` - is the path closed? (default false)
-- `options.capse` - add caps at the end? (default false)
-- `options.closedShape` - is the shape path closed? (default true)
+- `opts` - options
+- `opts.radius` - extruded geometry radius (default 1)
+- `opts.closed` - is the path closed? (default false)
+- `opts.capse` - add caps at the end? (default false)
+- `opts.closedShape` - is the shape path closed? (default true)
 
 Returns new geometry: `{ positions: [], normals: [], uvs: [], cells: [] }`
 
