@@ -20,7 +20,7 @@ var g = sweep(path, shape, opts)
 - `opts` - options
 - `opts.radius` - extruded geometry radius (default 1)
 - `opts.closed` - is the path closed? (default false)
-- `opts.capse` - add caps at the end? (default false)
+- `opts.caps` - add caps at the end? (default false)
 - `opts.closedShape` - is the shape path closed? (default true)
 
 Returns new geometry: `{ positions: [], normals: [], uvs: [], cells: [] }`
