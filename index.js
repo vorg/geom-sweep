@@ -20,6 +20,8 @@ function sweep (path, shapePath, options) {
 
   const dist = vec3.distance(path[0], path[path.length - 1])
   const isClosed = dist < EPSILON || options.closed
+  const isShapeClosed = (options.shapeClosed !== undefined) ? options.closedShape : true
+  const caps = options.caps && !isClosed
   const tangents = path.map((point, i, points) => {
     if (isClosed) {
       const nextPoint = (i < points.length - 1) ? points[i + 1] : points[1]
@@ -35,7 +37,7 @@ function sweep (path, shapePath, options) {
     }
   })
   const frames = makeFrames(path, tangents, isClosed)
-  const g = buildGeometry(frames, shapePath, options.caps, options.radius, isClosed)
+  const g = buildGeometry(frames, shapePath, caps, options.radius, isClosed, isShapeClosed)
   g.debugLines = []
 
   path.forEach((p, i) => {
@@ -141,7 +143,7 @@ function makeFrames (points, tangents, closed, rot) {
   return frames
 }
 
-function buildGeometry (frames, shapePath, caps, radius, isClosed) {
+function buildGeometry (frames, shapePath, caps, radius, isClosed, isShapeClosed) {
   caps = typeof caps !== 'undefined' ? caps : false
 
   var index = 0
@@ -149,6 +151,7 @@ function buildGeometry (frames, shapePath, caps, radius, isClosed) {
   var texCoords = []
   var normals = []
   var cells = []
+
   for (let i = 0; i < frames.length; i++) {
     var frame = frames[i]
     for (let j = 0; j < shapePath.length; j++) {
@@ -180,9 +183,10 @@ function buildGeometry (frames, shapePath, caps, radius, isClosed) {
   }
 
   var numSegments = shapePath.length
+  var numFaces = isShapeClosed ? shapePath.length : shapePath.length - 1 //TMP
   index = 0
   for (let i = 0; i < frames.length; i++) {
-    for (let j = 0; j < numSegments; j++) {
+    for (let j = 0; j < numFaces; j++) {
       if (i < frames.length - 1) {
         cells.push([index + (j + 1) % numSegments + numSegments, index + (j + 1) % numSegments, index + j, index + j + numSegments])
       }
@@ -191,7 +195,7 @@ function buildGeometry (frames, shapePath, caps, radius, isClosed) {
   }
   if (isClosed) {
     index -= numSegments
-    for (var j = 0; j < numSegments; j++) {
+    for (var j = 0; j < numFaces; j++) {
       cells.push([
         index + (j + 1) % numSegments + numSegments,
         index + (j + 1) % numSegments,
