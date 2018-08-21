@@ -1,6 +1,6 @@
 # geom-sweep
 
-![](screenshot.jpg)
+![](screenshot.png)
 
 Extrudes a shape along a path.
 
@@ -15,7 +15,15 @@ var g = sweep(path, shape, opts)
 
 ### `sweep(path, shape, opts)`
 
-Returns new geometry 
+- `path` - array of [x, y, z] positions defining the path to extrude along
+- `shape` - array of [x, y, z] positions defining the swept shape
+- `options`
+- `opyiond.radius` - extruded geometry radius (default 1)
+- `options.closed` - is the path closed? (default false)
+- `options.capse` - add caps at the end? (default false)
+- `options.closedShape` - is the shape path closed? (default true)
+
+Returns new geometry: `{ positions: [], normals: [], uvs: [], cells: [] }`
 
 ## License
 

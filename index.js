@@ -5,16 +5,6 @@ const clamp = require('pex-math/utils').clamp
 const toDegrees = require('pex-math/utils').toDegrees
 var EPSILON = 0.00001
 
-// ### Loft ( path, options)
-// `path` - path along which we will extrude the shape *{ Path/Spline = required }*
-// `options` - available options *{ Object }*
-//  - `numSteps` - number of extrusion steps along the path *{ Number/Int = 200 }*
-//  - `numSegments` - number of sides of the extruded shape *{ Number/Int = 8 }*
-//  - `r` - radius scale of the extruded shape *{ Number = 1 }*
-//  - `shapePath` - shape to be extruded, if none a circle will be generated *{ Path = null }*
-//  - `xShapeScale` - distorion scale along extruded shape x axis *{ Number = 1 }*
-//  - `caps` - generate ending caps geometry *{ bool = false }*
-//  - `initialNormal` - starting frame normal *{ vec3 = null }*
 function sweep (path, shapePath, options) {
   options = options || { }
 
