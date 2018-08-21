@@ -15,7 +15,7 @@ require('pex-cam/orbiter')({ camera: camera })
 const sweep = require('../')
 const computeNormals = require('angle-normals')
 const triangulate = require('geom-triangulate')
-const splinePoints = require('../../spline-points')
+const splinePoints = require('spline-points')
 var regl = require('regl')()
 
 const modelMatrix = Mat4.create()
@@ -48,13 +48,14 @@ const smoothPath = splinePoints(path, { segmentLength: 1 / 10, closed: true })
 
 // let g = createLoft(smoothPath, shape, { caps: true, radius: radius })
 // let g = sweep(path, shape, { radius: 0.1, closed: false })
-let g = sweep(smoothPath, shape, { radius: 0.1, closed: true })
+let g = sweep(smoothPath, shape, { radius: 0.1, closed: true, closedShape: true, caps: false })
 g.cells = triangulate(g.cells)
 
 const line = {
   positions: g.debugLines
 }
 
+console.log('g', g)
 g = splitVertices(g)
 g.normals = normals(g.positions, g.cells)
 g.uvs = g.normals.map(() => [0, 0])
@@ -64,6 +65,7 @@ const drawMesh = regl({
     aPosition: g.positions,
     // aNormal: g.positions,
     aNormal: computeNormals(g.cells, g.positions),
+    // aNormal: g.normals,
     aTexCoord: g.uvs
   },
   elements: g.cells,
