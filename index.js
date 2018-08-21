@@ -10,7 +10,8 @@ function sweep (path, shapePath, options) {
 
   const dist = vec3.distance(path[0], path[path.length - 1])
   const isClosed = dist < EPSILON || options.closed
-  const isShapeClosed = (options.shapeClosed !== undefined) ? options.closedShape : true
+  let isShapeClosed = (options.closedShape !== undefined) ? options.closedShape : true
+  if (shapePath.length == 2) isShapeClosed = false
   const caps = options.caps && !isClosed
   const tangents = path.map((point, i, points) => {
     if (isClosed) {
