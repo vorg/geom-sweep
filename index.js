@@ -143,6 +143,9 @@ function buildGeometry (frames, shapePath, caps, radius, isClosed, isShapeClosed
   var normals = []
   var cells = []
 
+  var numSegments = shapePath.length
+  var numFaces = isShapeClosed ? shapePath.length : shapePath.length - 1
+  var numFrameFaces = isClosed ? frames.length : frames.length - 1
   for (let i = 0; i < frames.length; i++) {
     var frame = frames[i]
     for (let j = 0; j < shapePath.length; j++) {
@@ -159,7 +162,7 @@ function buildGeometry (frames, shapePath, caps, radius, isClosed, isShapeClosed
       vec3.add(vec3.multMat4(p, frame.m), frame.position)
       positions.push(p)
       // texCoords.push([j / (shapePath.length - 1), i / (frames.length - 1)])
-      texCoords.push([j / (shapePath.length), i / (frames.length)])
+      texCoords.push([j / numFaces, i / numFrameFaces])
       normals.push(vec3.normalize(vec3.sub(vec3.copy(p), frame.position)))
     }
   }
@@ -173,8 +176,6 @@ function buildGeometry (frames, shapePath, caps, radius, isClosed, isShapeClosed
     normals.push(vec3.scale(vec3.copy(frames[frames.length - 1].tangent), -1))
   }
 
-  var numSegments = shapePath.length
-  var numFaces = isShapeClosed ? shapePath.length : shapePath.length - 1 //TMP
   index = 0
   for (let i = 0; i < frames.length; i++) {
     for (let j = 0; j < numFaces; j++) {
