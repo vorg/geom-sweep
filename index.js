@@ -142,6 +142,7 @@ function buildGeometry (frames, shapePath, caps, radius, isClosed, isShapeClosed
   var texCoords = []
   var normals = []
   var cells = []
+  var tangents = []
 
   var numSegments = shapePath.length
   var numFaces = isShapeClosed ? shapePath.length : shapePath.length - 1
@@ -163,6 +164,7 @@ function buildGeometry (frames, shapePath, caps, radius, isClosed, isShapeClosed
       positions.push(p)
       // texCoords.push([j / (shapePath.length - 1), i / (frames.length - 1)])
       texCoords.push([j / numFaces, i / numFrameFaces])
+      tangents.push(frame.tangent)
       normals.push(vec3.normalize(vec3.sub(vec3.copy(p), frame.position)))
     }
   }
@@ -207,7 +209,8 @@ function buildGeometry (frames, shapePath, caps, radius, isClosed, isShapeClosed
     positions: positions,
     uvs: texCoords,
     normals: normals,
-    cells: cells
+    cells: cells,
+    tangents: tangents
   }
 }
 
