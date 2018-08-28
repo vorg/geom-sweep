@@ -10,7 +10,7 @@
     "url": "https://github.com/vorg"
   },
   "dependencies": {
-    "pex-math": "^2.0.0"
+    "pex-math": "^3.0.0-0"
   },
   "devDependencies": {},
   "scripts": {
