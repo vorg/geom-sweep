@@ -53,7 +53,7 @@ const smoothPath = splinePoints(path, { segmentLength: 1 / 10, closed: true })
 
 // let g = createLoft(smoothPath, shape, { caps: true, radius: radius })
 // let g = sweep(path, shape, { radius: 0.1, closed: false })
-let g = sweep(smoothPath, shape, { radius: 0.1, closed: true, closedShape: true, caps: false })
+let g = sweep(smoothPath, shape, { radius: 0.1, closed: true, closedShape: true, caps: false, debug: true })
 g.cells = triangulate(g.cells)
 
 const line = {
