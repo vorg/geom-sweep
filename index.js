@@ -2,7 +2,6 @@ const vec3 = require('pex-math/vec3')
 const mat4 = require('pex-math/mat4')
 const quat = require('pex-math/quat')
 const clamp = require('pex-math/utils').clamp
-const toDegrees = require('pex-math/utils').toDegrees
 var EPSILON = 0.00001
 
 function sweep (path, shapePath, options) {
@@ -27,7 +26,7 @@ function sweep (path, shapePath, options) {
       }
     }
   })
-  const frames = makeFrames(path, tangents, isClosed)
+  const frames = makeFrames(path, tangents, isClosed, options.initialNormal)
   const g = buildGeometry(frames, shapePath, caps, options.radius, isClosed, isShapeClosed)
   g.debugLines = []
 
@@ -43,10 +42,7 @@ function sweep (path, shapePath, options) {
   return g
 }
 
-function makeFrames (points, tangents, closed, rot) {
-  if (rot == null) {
-    rot = 0
-  }
+function makeFrames (points, tangents, closed, initialNormal) {
   let tangent = tangents[0]
   const atx = Math.abs(tangent[0])
   const aty = Math.abs(tangent[1])
@@ -60,8 +56,7 @@ function makeFrames (points, tangents, closed, rot) {
     v = vec3.cross(vec3.copy(tangent), [0, 0, 1])
   }
 
-  // var normal = this.options.initialNormal || vec3.create().asCross(tangent, v).normalize()
-  let normal = vec3.normalize(vec3.cross(vec3.copy(tangent), v))
+  let normal = initialNormal || vec3.normalize(vec3.cross(vec3.copy(tangent), v))
   let binormal = vec3.normalize(vec3.cross(vec3.copy(tangent), normal))
   // let prevBinormal = null
   // let prevNormal = null
