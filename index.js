@@ -28,16 +28,19 @@ function sweep (path, shapePath, options) {
   })
   const frames = makeFrames(path, tangents, isClosed, options.initialNormal)
   const g = buildGeometry(frames, shapePath, caps, options.radius, isClosed, isShapeClosed)
-  g.debugLines = []
 
-  path.forEach((p, i) => {
-    g.debugLines.push(p)
-    g.debugLines.push(vec3.add(vec3.copy(p), vec3.scale(vec3.copy(frames[i].tangent), 0.2)))
-    g.debugLines.push(p)
-    g.debugLines.push(vec3.add(vec3.copy(p), vec3.scale(vec3.copy(frames[i].normal), 0.2)))
-    g.debugLines.push(p)
-    g.debugLines.push(vec3.add(vec3.copy(p), vec3.scale(vec3.copy(frames[i].binormal), 0.2)))
-  })
+  if (options.debug) {
+    g.debugLines = []
+
+    path.forEach((p, i) => {
+      g.debugLines.push(p)
+      g.debugLines.push(vec3.add(vec3.copy(p), vec3.scale(vec3.copy(frames[i].tangent), 0.2)))
+      g.debugLines.push(p)
+      g.debugLines.push(vec3.add(vec3.copy(p), vec3.scale(vec3.copy(frames[i].normal), 0.2)))
+      g.debugLines.push(p)
+      g.debugLines.push(vec3.add(vec3.copy(p), vec3.scale(vec3.copy(frames[i].binormal), 0.2)))
+    })
+  }
 
   return g
 }
