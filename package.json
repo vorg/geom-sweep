@@ -2,31 +2,49 @@
   "name": "geom-sweep",
   "version": "0.3.1",
   "description": "Extrudes a shape along a path",
-  "main": "index.js",
-  "license": "MIT",
-  "author": {
-    "name": "Marcin Ignac",
-    "email": "marcin.ignac@gmail.com",
-    "url": "https://github.com/vorg"
-  },
-  "dependencies": {
-    "pex-math": "^3.0.0-0"
-  },
-  "devDependencies": {},
-  "scripts": {
-    "test": "node test.js"
-  },
   "keywords": [
-    "geometry",
+    "geom",
+    "sweep",
+    "loft",
+    "taper",
+    "simplicial",
+    "complex",
+    "3d",
     "pex",
+    "geometry",
     "webgl"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git://github.com/vorg/geom-sweep.git"
-  },
   "homepage": "https://github.com/vorg/geom-sweep",
-  "bugs": {
-    "url": "https://github.com/vorg/geom-sweep/issues"
+  "bugs": "https://github.com/vorg/geom-sweep/issues",
+  "repository": "vorg/geom-sweep",
+  "license": "MIT",
+  "author": "Marcin Ignac <marcin.ignac@gmail.com> (https://github.com/vorg)",
+  "contributors": [
+    "Damien Seguin (https://github.com/dmnsgn)"
+  ],
+  "sideEffects": false,
+  "type": "module",
+  "exports": "./index.js",
+  "main": "index.js",
+  "types": "types/index.d.ts",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "scripts": {
+    "dev": "snowdev dev",
+    "release": "snowdev release"
+  },
+  "dependencies": {
+    "frenet-serret-frames": "^2.1.0",
+    "path-tangents": "^2.1.0"
+  },
+  "devDependencies": {
+    "es-module-shims": "^1.6.3",
+    "pex-cam": "^3.0.0-alpha.1",
+    "pex-context": "^3.0.0-alpha.5",
+    "pex-gui": "^3.0.0-alpha.2",
+    "pex-math": "^4.0.0-alpha.3",
+    "spline-points": "^0.2.1"
   }
 }
