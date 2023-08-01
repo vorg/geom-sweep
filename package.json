@@ -36,15 +36,15 @@
     "release": "snowdev release"
   },
   "dependencies": {
-    "frenet-serret-frames": "^2.1.0",
-    "path-tangents": "^2.1.0"
+    "frenet-serret-frames": "^3.0.3",
+    "pex-math": "^4.0.0-alpha.5",
+    "typed-array-constructor": "^1.0.1"
   },
   "devDependencies": {
-    "es-module-shims": "^1.6.3",
+    "es-module-shims": "^1.8.0",
     "pex-cam": "^3.0.0-alpha.1",
     "pex-context": "^3.0.0-alpha.5",
     "pex-gui": "^3.0.0-alpha.2",
-    "pex-math": "^4.0.0-alpha.3",
     "spline-points": "^0.2.1"
   }
 }
