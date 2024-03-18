@@ -63,7 +63,7 @@ const updateGeometry = () => {
       const r = (2 * ((i % 2) + 1)) / 2;
       const t = (Math.PI * 2 * i) / (starBranchCount * 2);
 
-      shape.push([r * Math.sin(t), r * Math.cos(t)]);
+      shape.push([r * Math.sin(t), r * Math.cos(t), 0]);
     }
   }
 

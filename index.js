@@ -20,6 +20,7 @@ function sweep(geometry, shapePath, options, out = {}) {
   caps &&= !closed;
 
   const isFlatArray = !geometry.positions[0]?.length;
+  const isShapeFlatArray = !shapePath[0]?.length;
 
   if (!isFlatArray) {
     geometry = { ...geometry };
@@ -37,8 +38,8 @@ function sweep(geometry, shapePath, options, out = {}) {
   }
 
   const pathLength = geometry.positions.length / 3;
-  const numSegments = shapePath.length;
-  const numFaces = closedShape ? shapePath.length : shapePath.length - 1;
+  const numSegments = shapePath.length / (isShapeFlatArray ? 3 : 1);
+  const numFaces = closedShape ? numSegments : numSegments - 1;
   const numFrameFaces = closed ? pathLength : pathLength - 1;
 
   const size = numSegments * pathLength + (caps ? 2 : 0);
@@ -67,13 +68,17 @@ function sweep(geometry, shapePath, options, out = {}) {
     TEMP_MAT4[9] = geometry.tangents[i * 3 + 1];
     TEMP_MAT4[10] = geometry.tangents[i * 3 + 2];
 
-    for (let j = 0; j < shapePath.length; j++) {
-      const aIndex = i * shapePath.length + j;
+    for (let j = 0; j < numSegments; j++) {
+      const aIndex = i * numSegments + j;
 
       // Positions
-      TEMP_VEC3[0] = shapePath[j][0];
-      TEMP_VEC3[1] = shapePath[j][1];
-      TEMP_VEC3[2] = 0;
+      if (isShapeFlatArray) {
+        avec3.set(TEMP_VEC3, 0, shapePath, j);
+      } else {
+        TEMP_VEC3[0] = shapePath[j][0];
+        TEMP_VEC3[1] = shapePath[j][1];
+        TEMP_VEC3[2] = 0;
+      }
 
       if (radius) {
         // TODO: there is ambiguity between [r, r] and [rx, ry]
