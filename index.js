@@ -52,7 +52,7 @@ function sweep(geometry, shapePath, options, out = {}) {
   }
   const cellsSize =
     numFrameFaces * numFaces * 6 + (caps ? 2 : 0) * numSegments * 3;
-  out.cells ||= new (typedArrayConstructor(cellsSize))(cellsSize);
+  out.cells ||= new (typedArrayConstructor(size))(cellsSize);
 
   for (let i = 0; i < pathLength; i++) {
     TEMP_MAT4[0] = geometry.binormals[i * 3];
@@ -102,7 +102,7 @@ function sweep(geometry, shapePath, options, out = {}) {
           aIndex,
           TEMP_MAT4[8],
           TEMP_MAT4[9],
-          TEMP_MAT4[10]
+          TEMP_MAT4[10],
         );
 
         // Binormals
@@ -156,7 +156,7 @@ function sweep(geometry, shapePath, options, out = {}) {
         cellIndex + 1,
         b,
         segmentIndex - numSegments + ((j + 1) % numSegments),
-        segmentIndex - numSegments + j
+        segmentIndex - numSegments + j,
       );
     }
   }
