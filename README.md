@@ -54,11 +54,11 @@ const geometry = sweep({ positions: path }, shape, {
 
 **Parameters**
 
-- geometry: `{ positions: TypedArray | Array<[x, y, z]>, normals?: TypedArray | Array<[x, y, z]>, tangents?: TypedArray | Array<[x, y, z]>, binormals?: TypedArray | Array<[x, y, z]> }` – a geometry object with positions defining the path to extrude along.
+- geometry: `{ positions: TypedArray | Array | Array<[x, y, z]>, normals?: TypedArray | Array | Array<[x, y, z]>, tangents?: TypedArray | Array | Array<[x, y, z]>, binormals?: TypedArray | Array | Array<[x, y, z]> }` – a geometry object with positions defining the path to extrude along.
 
-- shape: `Array<[x, y, z]>` – positions defining the swept shape.
+- shape: `TypedArray | Array | Array<[x, y, z]>` – positions defining the swept shape.
 
-- options.radius: `number` (default: `1`) - extruded geometry radius.
+- options.radius: `number | [x, y] | Array<[x, y]>` (default: `1`) - extruded geometry radius, or separate x/y radii, or array of separate x/y radii for every path position (ie. taper).
 - options.closed: `boolean` (default: `false`) - is the path closed.
 - options.closedShape: `boolean` (default: `true`) - is the shape path closed.
 - options.caps: `boolean` (default: `false`) - add caps at the end.
