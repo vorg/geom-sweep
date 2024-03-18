@@ -27,10 +27,6 @@
   "exports": "./index.js",
   "main": "index.js",
   "types": "types/index.d.ts",
-  "engines": {
-    "node": ">=18.0.0",
-    "npm": ">=8.0.0"
-  },
   "scripts": {
     "dev": "snowdev dev",
     "release": "snowdev release"
@@ -46,5 +42,9 @@
     "pex-context": "^3.0.0-alpha.5",
     "pex-gui": "^3.0.0",
     "spline-points": "^0.2.1"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=9.6.4"
   }
 }

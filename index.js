@@ -19,9 +19,9 @@ function sweep(geometry, shapePath, options, out = {}) {
   closedShape &&= !(shapePath.length === 2);
   caps &&= !closed;
 
-  const isTypedArray = !Array.isArray(geometry.positions);
+  const isFlatArray = !geometry.positions[0]?.length;
 
-  if (!isTypedArray) {
+  if (!isFlatArray) {
     geometry = { ...geometry };
     geometry.positions &&= new Float32Array(geometry.positions.flat());
     geometry.normals &&= new Float32Array(geometry.normals.flat());
