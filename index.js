@@ -1,8 +1,9 @@
-import { avec2, avec3, vec3, mat4 } from "pex-math";
+import { avec2, avec3, vec2, vec3, mat4 } from "pex-math";
 import computeFrenetSerretFrames from "frenet-serret-frames";
 import typedArrayConstructor from "typed-array-constructor";
 
 const TEMP_MAT4 = mat4.create();
+const TEMP_RADIUS_VEC2 = vec2.create();
 const TEMP_VEC3 = vec3.create();
 
 function sweep(geometry, shapePath, options, out = {}) {
@@ -68,6 +69,14 @@ function sweep(geometry, shapePath, options, out = {}) {
     TEMP_MAT4[9] = geometry.tangents[i * 3 + 1];
     TEMP_MAT4[10] = geometry.tangents[i * 3 + 2];
 
+    if (radius) {
+      // TODO: support geometry.radius?
+      // TODO: there is ambiguity between [r, r] and [rx, ry]
+      const r = radius.length ? radius[i] : radius;
+      TEMP_RADIUS_VEC2[0] = r[0] !== undefined ? r[0] : r;
+      TEMP_RADIUS_VEC2[1] = r[1] !== undefined ? r[1] : TEMP_RADIUS_VEC2[0];
+    }
+
     for (let j = 0; j < numSegments; j++) {
       const aIndex = i * numSegments + j;
 
@@ -75,18 +84,12 @@ function sweep(geometry, shapePath, options, out = {}) {
       if (isShapeFlatArray) {
         avec3.set(TEMP_VEC3, 0, shapePath, j);
       } else {
-        TEMP_VEC3[0] = shapePath[j][0];
-        TEMP_VEC3[1] = shapePath[j][1];
-        TEMP_VEC3[2] = 0;
+        vec3.set(TEMP_VEC3, shapePath[j]);
       }
 
       if (radius) {
-        // TODO: there is ambiguity between [r, r] and [rx, ry]
-        const r = radius.length ? radius[i] : radius;
-        const rx = r[0] !== undefined ? r[0] : r;
-        const ry = r[1] !== undefined ? r[1] : rx;
-        TEMP_VEC3[0] *= rx;
-        TEMP_VEC3[1] *= ry;
+        TEMP_VEC3[0] *= TEMP_RADIUS_VEC2[0];
+        TEMP_VEC3[1] *= TEMP_RADIUS_VEC2[1];
       }
       vec3.multMat4(TEMP_VEC3, TEMP_MAT4);
       avec3.add(TEMP_VEC3, 0, geometry.positions, i);
