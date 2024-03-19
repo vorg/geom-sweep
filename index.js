@@ -1,84 +1,122 @@
-import { avec3, vec3 } from "pex-math";
-import computePathTangents from "path-tangents";
+import { avec2, avec3, vec2, vec3, mat4 } from "pex-math";
 import computeFrenetSerretFrames from "frenet-serret-frames";
+import typedArrayConstructor from "typed-array-constructor";
 
-function avec2Set(a, i, b, j) {
-  a[i * 2] = b[j * 2];
-  a[i * 2 + 1] = b[j * 2 + 1];
-}
+const TEMP_MAT4 = mat4.create();
+const TEMP_RADIUS_VEC2 = vec2.create();
+const TEMP_VEC3 = vec3.create();
 
-function sweep(path, shapePath, options) {
-  const dist = vec3.distance(path[0], path[path.length - 1]);
-
+function sweep(geometry, shapePath, options, out = {}) {
   let {
-    closed = dist < Number.EPSILON || true,
+    radius = 1,
+    closed = false,
     closedShape = true,
     caps = false,
     initialNormal = null,
-    radius = 1,
-    pathTangents,
-    frames,
+    withFrames = false,
   } = {
     ...options,
   };
-  const isClosed = closed;
   closedShape &&= !(shapePath.length === 2);
-  caps &&= !isClosed;
+  caps &&= !closed;
 
-  pathTangents ||= computePathTangents(path, isClosed);
-  frames ||= computeFrenetSerretFrames(path, pathTangents, {
-    closed: isClosed,
-    initialNormal,
-  });
+  const isFlatArray = !geometry.positions[0]?.length;
+  const isShapeFlatArray = !shapePath[0]?.length;
 
-  const numSegments = shapePath.length;
-  const numFaces = closedShape ? shapePath.length : shapePath.length - 1;
-  const numFrameFaces = isClosed ? frames.length : frames.length - 1;
+  if (!isFlatArray) {
+    geometry = { ...geometry };
+    geometry.positions &&= new Float32Array(geometry.positions.flat());
+    geometry.normals &&= new Float32Array(geometry.normals.flat());
+    geometry.tangents &&= new Float32Array(geometry.tangents.flat());
+    geometry.binormals &&= new Float32Array(geometry.binormals.flat());
+  }
 
-  const size = numSegments * frames.length + (caps ? 2 : 0);
+  if (
+    !geometry.binormals ||
+    geometry.binormals.length !== geometry.positions.length
+  ) {
+    computeFrenetSerretFrames(geometry, { closed, initialNormal });
+  }
 
-  const positions = new Float32Array(size * 3);
-  const normals = new Float32Array(size * 3);
-  const tangents = new Float32Array(size * 3);
-  const uvs = new Float32Array(size * 2);
-  const cells = new Uint32Array(
-    numFrameFaces * numFaces * 6 + (caps ? 2 : 0) * numSegments * 3
-  );
+  const pathLength = geometry.positions.length / 3;
+  const numSegments = shapePath.length / (isShapeFlatArray ? 3 : 1);
+  const numFaces = closedShape ? numSegments : numSegments - 1;
+  const numFrameFaces = closed ? pathLength : pathLength - 1;
 
-  // let segmentIndex = 0;
+  const size = numSegments * pathLength + (caps ? 2 : 0);
 
-  for (let i = 0; i < frames.length; i++) {
-    const frame = frames[i];
+  out.positions ||= new Float32Array(size * 3);
+  out.normals ||= new Float32Array(size * 3);
+  out.uvs ||= new Float32Array(size * 2);
+  if (withFrames) {
+    out.tangents ||= new Float32Array(size * 3);
+    out.binormals ||= new Float32Array(size * 3);
+  }
+  const cellsSize =
+    numFrameFaces * numFaces * 6 + (caps ? 2 : 0) * numSegments * 3;
+  out.cells ||= new (typedArrayConstructor(size))(cellsSize);
 
-    // prettier-ignore
-    const m = [
-      ...frame.binormal, 0,
-      ...frame.normal, 0,
-      ...frame.tangent, 0,
-      0, 0, 0, 1
-    ]
+  for (let i = 0; i < pathLength; i++) {
+    TEMP_MAT4[0] = geometry.binormals[i * 3];
+    TEMP_MAT4[1] = geometry.binormals[i * 3 + 1];
+    TEMP_MAT4[2] = geometry.binormals[i * 3 + 2];
 
-    for (let j = 0; j < shapePath.length; j++) {
-      let p = vec3.copy(shapePath[j]);
-      p = [p[0], p[1], 0];
-      if (radius) {
-        // TODO: there is ambiguity between [r, r] and [rx, ry]
-        const r = radius.length ? radius[i] : radius;
-        const rx = r[0] !== undefined ? r[0] : r;
-        const ry = r[1] !== undefined ? r[1] : rx;
-        p[0] *= rx;
-        p[1] *= ry;
+    TEMP_MAT4[4] = geometry.normals[i * 3];
+    TEMP_MAT4[5] = geometry.normals[i * 3 + 1];
+    TEMP_MAT4[6] = geometry.normals[i * 3 + 2];
+
+    TEMP_MAT4[8] = geometry.tangents[i * 3];
+    TEMP_MAT4[9] = geometry.tangents[i * 3 + 1];
+    TEMP_MAT4[10] = geometry.tangents[i * 3 + 2];
+
+    if (radius) {
+      // TODO: support geometry.radius?
+      // TODO: there is ambiguity between [r, r] and [rx, ry]
+      const r = radius.length ? radius[i] : radius;
+      TEMP_RADIUS_VEC2[0] = r[0] !== undefined ? r[0] : r;
+      TEMP_RADIUS_VEC2[1] = r[1] !== undefined ? r[1] : TEMP_RADIUS_VEC2[0];
+    }
+
+    for (let j = 0; j < numSegments; j++) {
+      const aIndex = i * numSegments + j;
+
+      // Positions
+      if (isShapeFlatArray) {
+        avec3.set(TEMP_VEC3, 0, shapePath, j);
+      } else {
+        vec3.set(TEMP_VEC3, shapePath[j]);
       }
 
-      vec3.add(vec3.multMat4(p, m), frame.position);
-      const uv = [j / numFaces, i / numFrameFaces];
-      const n = vec3.normalize(vec3.sub(vec3.copy(p), frame.position));
+      if (radius) {
+        TEMP_VEC3[0] *= TEMP_RADIUS_VEC2[0];
+        TEMP_VEC3[1] *= TEMP_RADIUS_VEC2[1];
+      }
+      vec3.multMat4(TEMP_VEC3, TEMP_MAT4);
+      avec3.add(TEMP_VEC3, 0, geometry.positions, i);
+      avec3.set(out.positions, aIndex, TEMP_VEC3, 0);
 
-      const aIndex = i * shapePath.length + j;
-      avec3.set(positions, aIndex, p, 0);
-      avec3.set(normals, aIndex, n, 0);
-      avec3.set(tangents, aIndex, frame.tangent, 0);
-      avec2Set(uvs, aIndex, uv, 0);
+      // Normals
+      avec3.sub(TEMP_VEC3, 0, geometry.positions, i);
+      vec3.normalize(TEMP_VEC3);
+      avec3.set(out.normals, aIndex, TEMP_VEC3, 0);
+
+      // UVs
+      avec2.set2(out.uvs, aIndex, j / numFaces, i / numFrameFaces);
+
+      if (withFrames) {
+        // Tangents
+        avec3.set3(
+          out.tangents,
+          aIndex,
+          TEMP_MAT4[8],
+          TEMP_MAT4[9],
+          TEMP_MAT4[10],
+        );
+
+        // Binormals
+        avec3.set(out.binormals, aIndex, out.tangents, aIndex);
+        avec3.cross(out.binormals, aIndex, out.normals, aIndex);
+      }
 
       // Cells
       if (j < numFaces) {
@@ -88,53 +126,50 @@ function sweep(path, shapePath, options) {
         const d = i * numSegments + j + numSegments;
         const cellIndex = i * numFaces * 2 + j * 2;
 
-        if (i < frames.length - 1) {
-          avec3.set3(cells, cellIndex, a, b, c);
-          avec3.set3(cells, cellIndex + 1, a, c, d);
-        } else if (isClosed) {
-          avec3.set3(cells, cellIndex, a % size, b % size, c % size);
-          avec3.set3(cells, cellIndex + 1, a % size, c % size, d % size);
+        if (i < pathLength - 1) {
+          avec3.set3(out.cells, cellIndex, a, b, c);
+          avec3.set3(out.cells, cellIndex + 1, a, c, d);
+        } else if (closed) {
+          avec3.set3(out.cells, cellIndex, a % size, b % size, c % size);
+          avec3.set3(out.cells, cellIndex + 1, a % size, c % size, d % size);
         }
       }
     }
   }
 
   if (caps) {
-    const fStart = frames[0];
-    const fEnd = frames[frames.length - 1];
+    const firstPosition = geometry.positions.slice(0, 3);
+    const lastPosition = geometry.positions.slice(-3);
+    const firstTangent = geometry.tangents.slice(0, 3);
+    const lastTangent = geometry.tangents.slice(-3);
 
-    avec3.set(positions, size - 2, fStart.position, 0);
-    avec3.set(positions, size - 1, fEnd.position, 0);
-    avec3.set(normals, size - 2, vec3.scale(vec3.copy(fStart.tangent), -1), 0);
-    avec3.set(normals, size - 1, vec3.scale(vec3.copy(fEnd.tangent), -1), 0);
-    avec2Set(uvs, size - 2, [0, 0], 0);
-    avec2Set(uvs, size - 1, [1, 1], 0);
+    const a = size - 2;
+    const b = size - 1;
+
+    avec3.set(out.positions, a, firstPosition, 0);
+    avec3.set(out.positions, b, lastPosition, 0);
+    avec3.set(out.normals, a, vec3.scale(vec3.copy(firstTangent), -1), 0);
+    avec3.set(out.normals, b, vec3.scale(vec3.copy(lastTangent), -1), 0);
+    // avec2.set2(out.uvs, a, 0, 0);
+    avec2.set2(out.uvs, b, 1, 1);
 
     const startIndex = numFrameFaces * numFaces * 2;
-    const segmentIndex = frames.length * numSegments;
+    const segmentIndex = pathLength * numSegments;
     for (let j = 0; j < numSegments; j++) {
       const cellIndex = startIndex + j * 2;
 
-      avec3.set3(cells, cellIndex, j, (j + 1) % numSegments, size - 2);
+      avec3.set3(out.cells, cellIndex, j, (j + 1) % numSegments, a);
       avec3.set3(
-        cells,
+        out.cells,
         cellIndex + 1,
-        size - 1,
+        b,
         segmentIndex - numSegments + ((j + 1) % numSegments),
-        segmentIndex - numSegments + j
+        segmentIndex - numSegments + j,
       );
     }
   }
 
-  return {
-    positions,
-    normals,
-    uvs,
-    cells,
-
-    tangents,
-    frames,
-  };
+  return out;
 }
 
 export default sweep;

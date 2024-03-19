@@ -1,25 +1,28 @@
 import sweep from "../index.js";
 
 import createContext from "pex-context";
-import { vec3, mat4 } from "pex-math";
+import { avec3, avec4, mat4 } from "pex-math";
 import createGUI from "pex-gui";
 import { perspective as createCamera, orbiter as createOrbiter } from "pex-cam";
 import splinePoints from "spline-points";
 
 const State = {
-  closed: true,
+  closed: false,
   closedShape: true,
-  caps: true,
+  caps: false,
+  withFrames: true,
   radius: 0.1,
 
   taper: false,
   smoothPath: true,
+  typedArray: true,
   shape: 0,
   shapes: ["square", "star"],
   path: 1,
   paths: ["circle", "knot"],
 
-  debug: true,
+  frame: 0,
+  frames: ["none", "path", "swept"],
   mode: 2,
   shadings: ["normals", "simple lighting", "standard derivative", "uvs"],
 };
@@ -60,7 +63,7 @@ const updateGeometry = () => {
       const r = (2 * ((i % 2) + 1)) / 2;
       const t = (Math.PI * 2 * i) / (starBranchCount * 2);
 
-      shape.push([r * Math.sin(t), r * Math.cos(t)]);
+      shape.push([r * Math.sin(t), r * Math.cos(t), 0]);
     }
   }
 
@@ -108,59 +111,67 @@ const updateGeometry = () => {
       ])
     : State.radius;
 
-  const g = sweep(smoothPath, shape, {
+  const geometry = {
+    positions: State.typedArray
+      ? new Float32Array(smoothPath.flat())
+      : smoothPath,
+  };
+  console.time("Sweeping time");
+  const sweptGeometry = sweep(geometry, shape, {
     ...State,
     radius,
-    // initialNormal: [-1, 0, 0],
+    initialNormal: State.paths[State.path] === "circle" && [0, 0, 1],
   });
-  const isTypedArray = !Array.isArray(g.cells);
-  console.log(g);
+  console.timeEnd("Sweeping time");
+  console.log(sweptGeometry);
 
   cmdOptions = {
     attributes: {
-      aPosition: ctx.vertexBuffer(g.positions),
-      aNormal: ctx.vertexBuffer(g.normals),
-      aUv: ctx.vertexBuffer(g.uvs),
+      aPosition: ctx.vertexBuffer(sweptGeometry.positions),
+      aNormal: ctx.vertexBuffer(sweptGeometry.normals),
+      aUv: ctx.vertexBuffer(sweptGeometry.uvs),
     },
-    indices: ctx.indexBuffer(g.cells),
+    indices: ctx.indexBuffer(sweptGeometry.cells),
   };
 
   // Frame lines
-  const positions = [];
-  const colors = [];
-  const red = [1, 0, 0, 1];
-  const green = [0, 1, 0, 1];
-  const blue = [0, 0, 1, 1];
+  if (State.frames[State.frame] !== "none") {
+    const g = State.frames[State.frame] === "swept" ? sweptGeometry : geometry;
+    const size = g.positions.length / 3;
+    const tnbBuffer = new Float32Array(size * 3 * 6);
+    const colorBuffer = new Float32Array(size * 4 * 6);
+    const frameScale = State.radius * 2;
+    for (let i = 0; i < size; i++) {
+      avec3.set(tnbBuffer, i * 6 + 2, g.positions, i);
+      avec3.set(tnbBuffer, i * 6 + 3, g.positions, i);
+      avec3.addScaled(tnbBuffer, i * 6 + 3, g.normals, i, frameScale);
 
-  if (State.debug) {
-    path.forEach((p, i) => {
-      positions.push(
-        p,
-        vec3.add(
-          vec3.copy(p),
-          vec3.scale(vec3.copy(g.frames[i].tangent), State.radius * 2)
-        ),
-        p,
-        vec3.add(
-          vec3.copy(p),
-          vec3.scale(vec3.copy(g.frames[i].normal), State.radius * 2)
-        ),
-        p,
-        vec3.add(
-          vec3.copy(p),
-          vec3.scale(vec3.copy(g.frames[i].binormal), State.radius * 2)
-        )
-      );
-      colors.push(red, red, green, green, blue, blue);
-    });
+      if (g.tangents) {
+        avec3.set(tnbBuffer, i * 6, g.positions, i);
+        avec3.set(tnbBuffer, i * 6 + 1, g.positions, i);
+        avec3.addScaled(tnbBuffer, i * 6 + 1, g.tangents, i, frameScale);
+      }
+      if (g.binormals) {
+        avec3.set(tnbBuffer, i * 6 + 4, g.positions, i);
+        avec3.set(tnbBuffer, i * 6 + 5, g.positions, i);
+        avec3.addScaled(tnbBuffer, i * 6 + 5, g.binormals, i, frameScale);
+      }
+
+      avec4.set(colorBuffer, i * 6 + 0, [1, 0, 0, 1], 0);
+      avec4.set(colorBuffer, i * 6 + 1, [0.5, 0, 0, 1], 0);
+      avec4.set(colorBuffer, i * 6 + 2, [0, 1, 0, 1], 0);
+      avec4.set(colorBuffer, i * 6 + 3, [0, 0.5, 0, 1], 0);
+      avec4.set(colorBuffer, i * 6 + 4, [0, 0, 1, 1], 0);
+      avec4.set(colorBuffer, i * 6 + 5, [0, 0, 0.5, 1], 0);
+    }
+    cmdLineOptions = {
+      attributes: {
+        aPosition: ctx.vertexBuffer(tnbBuffer),
+        aColor: ctx.vertexBuffer(colorBuffer),
+      },
+      count: size * 6,
+    };
   }
-  cmdLineOptions = {
-    attributes: {
-      aPosition: ctx.vertexBuffer(positions),
-      aColor: ctx.vertexBuffer(colors),
-    },
-    count: positions.length,
-  };
 };
 
 updateGeometry();
@@ -170,6 +181,7 @@ gui.addColumn("Sweep Options");
 gui.addParam("closed", State, "closed", undefined, updateGeometry);
 gui.addParam("closedShape", State, "closedShape", undefined, updateGeometry);
 gui.addParam("caps", State, "caps", undefined, updateGeometry);
+gui.addParam("withFrames", State, "withFrames", undefined, updateGeometry);
 gui.addParam("radius", State, "radius", { min: 0, max: 0.5 }, updateGeometry);
 
 gui.addColumn("Example Options");
@@ -189,9 +201,16 @@ gui.addRadioList(
 );
 gui.addParam("taper", State, "taper", undefined, updateGeometry);
 gui.addParam("smoothPath", State, "smoothPath", undefined, updateGeometry);
+gui.addParam("typedArray", State, "typedArray", undefined, updateGeometry);
 
 gui.addColumn("Rendering");
-gui.addParam("debug", State, "debug", undefined, updateGeometry);
+gui.addRadioList(
+  "Frames",
+  State,
+  "frame",
+  State.frames.map((name, value) => ({ name, value })),
+  updateGeometry
+);
 gui.addRadioList(
   "Mode",
   State,
@@ -273,7 +292,6 @@ void main () {
   if (uMode == 3.0) gl_FragColor = vec4(vUv.xy, 0.0, 1.0);
 }
     `,
-    // primitive: ctx.Primitive.Lines,
   }),
   uniforms: {
     uProjectionMatrix: camera.projectionMatrix,
@@ -285,6 +303,7 @@ void main () {
 
 const drawLine = {
   pipeline: ctx.pipeline({
+    depthTest: true,
     vert: /* glsl */ `
 attribute vec3 aPosition;
 attribute vec4 aColor;
@@ -334,7 +353,9 @@ ctx.frame(() => {
       uMode: State.mode,
     },
   });
-  if (State.debug) ctx.submit(drawLine, cmdLineOptions);
+  if (State.frames[State.frame] !== "none") {
+    ctx.submit(drawLine, cmdLineOptions);
+  }
 
   gui.draw();
 });

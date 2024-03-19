@@ -32,37 +32,44 @@ const shape = [
   [1, -1, 0],
 ];
 
-const geometry = sweep(path, shape, options);
+const geometry = sweep({ positions: path }, shape, {
+  radius: 0.5,
+  closed: true,
+  initialNormal: [0, 0, 1],
+  withFrames: true,
+});
 // => {
 //   positions: Float32Array(756),
 //   normals: Float32Array(756),
 //   uvs: Float32Array(504),
 //   cells: Uint32Array(1512),
-//   tangents: Float32Array(756),
-//   frames: [{...}, {...}]
+//   tangents?: Float32Array(756),
+//   binormals?: Float32Array(756),
 // }
 ```
 
 ## API
 
-#### `sweep(path, shape, options): geometry`
+#### `sweep(geometry, shape, options, out?): geometry`
 
 **Parameters**
 
-- path: `Array<[x, y, z]>` – positions defining the path to extrude along
-- shape: `Array<[x, y, z]>` – positions defining the swept shape
+- geometry: `{ positions: TypedArray | Array | Array<[x, y, z]>, normals?: TypedArray | Array | Array<[x, y, z]>, tangents?: TypedArray | Array | Array<[x, y, z]>, binormals?: TypedArray | Array | Array<[x, y, z]> }` – a geometry object with positions defining the path to extrude along.
 
-- options.radius: `number` (default: `1`) - extruded geometry radius.
+- shape: `TypedArray | Array | Array<[x, y, z]>` – positions defining the swept shape.
+
+- options.radius: `number | [x, y] | Array<[x, y]>` (default: `1`) - extruded geometry radius, or separate x/y radii, or array of separate x/y radii for every path position (ie. taper).
 - options.closed: `boolean` (default: `false`) - is the path closed.
 - options.closedShape: `boolean` (default: `true`) - is the shape path closed.
 - options.caps: `boolean` (default: `false`) - add caps at the end.
 - options.initialNormal: `Array` (default: `null`) - provide a starting normal for the frames. Default to the direction of the minimum tangent component.
-- options.pathTangents: `Array` (default: `undefined`) - pass pre-computed path tangents.
-- options.frames: `Array<{ normal, tangent, bitangent }>` (default: `undefined`) - pass pre-computed frenet serret frames.
+- options.withFrames: `boolean` (default: `false`) - compute tangents and binormals.
+
+- out: `{ positions: TypedArray, normals?: TypedArray, tangents?: TypedArray, binormals?: TypedArray }` (default: `{}`) – a geometry object with pre-allocated typed array with each attributes being a multiple of `shape length * path vertices count + (caps ? 2 : 0)`.
 
 **Returns**
 
-geometry: `{ positions: TypedArray|Array, normals: TypedArray|Array, uvs: TypedArray|Array, cells: TypedArray|Array, tangents: TypedArray|Array, frames: Array<{ normal, tangent, bitangent }> }` - the extruded geometry with tangents and frenet serret frames.
+geometry: `{ positions: TypedArray, normals: TypedArray, uvs: TypedArray, cells: TypedArray, tangents?: TypedArray, binormals: TypedArray }` - the extruded geometry with optional tangents and binormals.
 
 ## License
 
