@@ -1,6 +1,6 @@
 {
   "name": "geom-sweep",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Extrudes a shape along a path",
   "keywords": [
     "geom",
