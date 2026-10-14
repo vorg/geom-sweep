@@ -148,6 +148,105 @@ describe("sweep", () => {
     }
   });
 
+  // Normals against the actual walls: unit and perpendicular to the
+  // neighbouring vertices along the ring and along the path
+  const assertPerpendicularNormals = (geometry, columnCount, epsilon) => {
+    const { positions, normals } = geometry;
+    const ringCount = positions.length / 3 / columnCount;
+    const direction = [0, 0, 0];
+    for (let i = 1; i < ringCount - 1; i++) {
+      for (let j = 1; j < columnCount - 1; j++) {
+        const vertex = i * columnCount + j;
+        assert.ok(
+          close(Math.hypot(...normals.subarray(vertex * 3, vertex * 3 + 3)), 1),
+        );
+        for (const [a, b] of [
+          [vertex - 1, vertex + 1],
+          [vertex - columnCount, vertex + columnCount],
+        ]) {
+          for (let k = 0; k < 3; k++) {
+            direction[k] = positions[b * 3 + k] - positions[a * 3 + k];
+          }
+          const length = Math.hypot(...direction);
+          let dot = 0;
+          for (let k = 0; k < 3; k++)
+            dot += normals[vertex * 3 + k] * direction[k];
+          assert.ok(Math.abs(dot / length) < epsilon, `${dot / length}`);
+        }
+      }
+    }
+  };
+
+  describe("normals", () => {
+    // Smooth circle: one column per point plus the u seam
+    const shape = { positions: circle(128, 1, true) };
+    const columnCount = 129;
+    const elliptical = (count) => Array(count).fill([0.3, 0.1]);
+
+    for (const [name, path, radius] of [
+      ["uniform", line(64), 0.2],
+      ["elliptical", line(64), elliptical(64)],
+      [
+        "tapered",
+        line(64),
+        Array.from({ length: 64 }, (_, i) => [0.05 + i * 0.005, 0.1]),
+      ],
+      ["curved", circle(256, 1, true), elliptical(256)],
+    ]) {
+      it(`are perpendicular to ${name} walls`, () => {
+        const geometry = sweep({ positions: path }, shape, { radius });
+        assertPerpendicularNormals(geometry, columnCount, 0.01);
+      });
+    }
+
+    it("are perpendicular to twisted walls", () => {
+      const geometry = sweep({ positions: line(64) }, shape, {
+        radius: elliptical(64),
+        frameOptions: { twist: Math.PI },
+      });
+      assertPerpendicularNormals(geometry, columnCount, 0.01);
+    });
+  });
+
+  it("forwards frame options", () => {
+    const shape = { positions: [1, 0, 0, 1, 0.1, 0] };
+    const path = { positions: line(4) };
+    const { positions } = sweep(path, shape, {
+      frameOptions: { initialNormal: [1, 0, 0] },
+    });
+    // Binormal = tangent × normal = z × x
+    assertArrayClose(assert, positions.subarray(0, 3), [0, 1, 0]);
+
+    const twisted = sweep(path, shape, {
+      frameOptions: { initialNormal: [1, 0, 0], twist: Math.PI / 2 },
+    });
+    assertArrayClose(assert, twisted.positions.subarray(0, 3), [0, 1, 0]);
+    assert.ok(
+      !close(twisted.positions.at(-6), positions.at(-6)) ||
+        !close(twisted.positions.at(-5), positions.at(-5)),
+    );
+  });
+
+  it("outputs orthonormal frames", () => {
+    const geometry = sweep(
+      { positions: line(16) },
+      { positions: circle(16, 1, true) },
+      {
+        radius: Array.from({ length: 16 }, (_, i) => [0.1 + i * 0.02, 0.1]),
+        withFrames: true,
+      },
+    );
+    const { tangents, normals, binormals } = geometry;
+    for (let i = 0; i < tangents.length; i += 3) {
+      const t = tangents.subarray(i, i + 3);
+      const n = normals.subarray(i, i + 3);
+      const b = binormals.subarray(i, i + 3);
+      assert.ok(close(t[0] * n[0] + t[1] * n[1] + t[2] * n[2], 0));
+      assert.ok(close(Math.hypot(...t), 1));
+      assert.ok(close(Math.hypot(...b), 1));
+    }
+  });
+
   it("outputs frames", () => {
     const geometry = sweep(
       { positions: line(3) },

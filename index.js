@@ -36,7 +36,7 @@ function sweep(geometry, shape, options, out = {}) {
     radius = 1,
     closed = "auto",
     closedShape = "auto",
-    initialNormal = null,
+    frameOptions,
     withFrames = false,
   } = {
     ...options,
@@ -47,7 +47,7 @@ function sweep(geometry, shape, options, out = {}) {
   if (!path.binormals || path.binormals.length !== path.positions.length) {
     delete path.normals;
     delete path.binormals;
-    computeFrenetSerretFrames(path, { closed: isClosed, initialNormal });
+    computeFrenetSerretFrames(path, { ...frameOptions, closed: isClosed });
   }
 
   const shapePositions = toFlatArray(shape.positions);
@@ -98,6 +98,8 @@ function sweep(geometry, shape, options, out = {}) {
       const r = radius.length ? radius[i] : radius;
       TEMP_RADIUS_VEC2[0] = r[0] !== undefined ? r[0] : r;
       TEMP_RADIUS_VEC2[1] = r[1] !== undefined ? r[1] : TEMP_RADIUS_VEC2[0];
+    } else {
+      vec2.set(TEMP_RADIUS_VEC2, [1, 1]);
     }
 
     for (let j = 0; j < columnCount; j++) {
@@ -105,25 +107,60 @@ function sweep(geometry, shape, options, out = {}) {
 
       // Positions
       avec3.set(TEMP_VEC3, 0, shapePositions, columns.shapeIndices[j]);
-      if (radius) {
-        TEMP_VEC3[0] *= TEMP_RADIUS_VEC2[0];
-        TEMP_VEC3[1] *= TEMP_RADIUS_VEC2[1];
-      }
+      TEMP_VEC3[0] *= TEMP_RADIUS_VEC2[0];
+      TEMP_VEC3[1] *= TEMP_RADIUS_VEC2[1];
       vec3.multMat4(TEMP_VEC3, TEMP_MAT4);
       avec3.add(TEMP_VEC3, 0, path.positions, i);
       avec3.set(out.positions, vertex, TEMP_VEC3, 0);
 
-      // Normals
+      // Normals: scaled by the other radius rather than divided by their own,
+      // perpendicular to walls stretched by x/y radii, even a zero one
       avec3.set(TEMP_VEC3, 0, columns.normals, j);
+      TEMP_VEC3[0] *= TEMP_RADIUS_VEC2[1];
+      TEMP_VEC3[1] *= TEMP_RADIUS_VEC2[0];
       vec3.multMat4(TEMP_VEC3, TEMP_MAT4);
-      vec3.normalize(TEMP_VEC3);
       avec3.set(out.normals, vertex, TEMP_VEC3, 0);
 
       // UVs
       avec2.set2(out.uvs, vertex, columns.u[j], i / stitchCount);
+    }
+  }
+
+  // Tilt normals along the tangent to stay perpendicular to the walls between
+  // rings, eg. tapered or twisted
+  const lastRing = ringCount - 1;
+  for (let i = 0; i < ringCount; i++) {
+    const previous = i > 0 ? i - 1 : isClosed ? lastRing : i;
+    const next = i < lastRing ? i + 1 : isClosed ? 0 : i;
+
+    for (let j = 0; j < columnCount; j++) {
+      const vertex = i * columnCount + j;
+
+      avec3.set(TEMP_VEC3, 0, out.positions, next * columnCount + j);
+      avec3.sub(TEMP_VEC3, 0, out.positions, previous * columnCount + j);
+      const along = avec3.dot(path.tangents, i, TEMP_VEC3, 0);
+      if (along) {
+        avec3.addScaled(
+          out.normals,
+          vertex,
+          path.tangents,
+          i,
+          -avec3.dot(out.normals, vertex, TEMP_VEC3, 0) / along,
+        );
+      }
+      avec3.normalize(out.normals, vertex);
 
       if (withFrames) {
+        // Orthogonal to the tilted normal
         avec3.set(out.tangents, vertex, path.tangents, i);
+        avec3.addScaled(
+          out.tangents,
+          vertex,
+          out.normals,
+          vertex,
+          -avec3.dot(out.tangents, vertex, out.normals, vertex),
+        );
+        avec3.normalize(out.tangents, vertex);
         avec3.set(out.binormals, vertex, out.tangents, vertex);
         avec3.cross(out.binormals, vertex, out.normals, vertex);
       }

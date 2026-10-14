@@ -69,10 +69,14 @@ const PATHS = {
 
 const CLOSED = ["auto", true, false];
 
+const FRAME_MODES = ["bishop", "frenet"];
+
 const State = {
   closed: 0,
   closedShape: 0,
   withFrames: true,
+  frameMode: 0,
+  twist: 0,
   // primitive-geometry shapes fit a unit square
   radius: 0.2,
 
@@ -301,7 +305,11 @@ const updateGeometry = () => {
     closed: CLOSED[State.closed],
     closedShape: CLOSED[State.closedShape],
     withFrames: State.withFrames,
-    initialNormal: State.paths[State.path] === "circle" && [0, 0, 1],
+    frameOptions: {
+      mode: FRAME_MODES[State.frameMode],
+      twist: State.twist,
+      initialNormal: State.paths[State.path] === "circle" ? [0, 0, 1] : null,
+    },
   });
   console.timeEnd("Sweeping time");
   console.log(sweptGeometry);
@@ -362,6 +370,20 @@ gui.addRadioList(
   updateGeometry,
 );
 gui.addParam("withFrames", State, "withFrames", undefined, updateGeometry);
+gui.addRadioList(
+  "frameOptions.mode",
+  State,
+  "frameMode",
+  toItems(FRAME_MODES),
+  updateGeometry,
+);
+gui.addParam(
+  "frameOptions.twist",
+  State,
+  "twist",
+  { min: -Math.PI * 2, max: Math.PI * 2 },
+  updateGeometry,
+);
 gui.addParam("radius", State, "radius", { min: 0, max: 1 }, updateGeometry);
 
 gui.addColumn("Example Options");
