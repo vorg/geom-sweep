@@ -14,37 +14,24 @@ npm install geom-sweep
 
 ```js
 import sweep from "geom-sweep";
+import { circlePath, squarePath } from "primitive-geometry";
 
-// Create a circle
-const path = [];
-for (let i = 0; i < 50; i++) {
-  path.push([
-    Math.cos((i / 50) * 2 * Math.PI),
-    Math.sin((i / 50) * 2 * Math.PI),
-    0,
-  ]);
-}
-// Create a square
-const shape = [
-  [1, 1, 0],
-  [-1, 1, 0],
-  [-1, -1, 0],
-  [1, -1, 0],
-];
-
-const geometry = sweep({ positions: path }, shape, {
-  radius: 0.5,
-  closed: true,
-  initialNormal: [0, 0, 1],
-  withFrames: true,
-});
+const geometry = sweep(
+  circlePath({ segments: 50, closed: true }),
+  squarePath({ closed: true }),
+  {
+    radius: [0.5, 0.5],
+    frameOptions: { initialNormal: [0, 0, 1] },
+    withFrames: true,
+  },
+);
 // => {
-//   positions: Float32Array(756),
-//   normals: Float32Array(756),
-//   uvs: Float32Array(504),
-//   cells: Uint32Array(1512),
-//   tangents?: Float32Array(756),
-//   binormals?: Float32Array(756),
+//   positions: Float32Array(1224),
+//   normals: Float32Array(1224),
+//   uvs: Float32Array(816),
+//   cells: Uint16Array(1200),
+//   tangents?: Float32Array(1224),
+//   binormals?: Float32Array(1224),
 // }
 ```
 
@@ -52,24 +39,35 @@ const geometry = sweep({ positions: path }, shape, {
 
 #### `sweep(geometry, shape, options, out?): geometry`
 
+All attributes are flat arrays (`TypedArray | Array`): `[x, y, z, x, y, z, ...]`, or `[x, y, x, y, ...]` for `uvs` and `radii`.
+
 **Parameters**
 
-- geometry: `{ positions: TypedArray | Array | Array<[x, y, z]>, normals?: TypedArray | Array | Array<[x, y, z]>, tangents?: TypedArray | Array | Array<[x, y, z]>, binormals?: TypedArray | Array | Array<[x, y, z]> }` – a geometry object with positions defining the path to extrude along.
+- geometry: `{ positions: TypedArray | Array, cells?: Array<TypedArray | Array>, tangents?: TypedArray | Array, normals?: TypedArray | Array, binormals?: TypedArray | Array, radii?: TypedArray | Array }` – a geometry object with positions defining the path to sweep along, in the order of the first polyline in nested `cells` if any (other ones are ignored). Frames are computed with [frenet-serret-frames](https://github.com/dmnsgn/frenet-serret-frames) unless `tangents`, `normals` and `binormals` are all given, keeping given `tangents`, without writing to the geometry. `radii` are x/y radii for every path position (ie. taper): `[rx0, ry0, rx1, ry1, ...]`, multiplied by `options.radius`. Other flat per-vertex attributes (eg. `vertexColors`) are copied to the swept geometry.
 
-- shape: `TypedArray | Array | Array<[x, y, z]>` – positions defining the swept shape.
+- shape: `{ positions: TypedArray | Array, cells?: Array<TypedArray | Array> | TypedArray | Array, uvs?: TypedArray | Array }` – a planar shape in the XY plane, analysed with [geom-extrude](https://github.com/dmnsgn/geom-extrude):
+  - polylines (`cells` as an array of index arrays): closed ones repeat their first index or position, nested loops are holes.
+  - triangles (flat `cells`): walls along the boundary, triangles as caps.
+  - positions only: a single polyline.
 
-- options.radius: `number | [x, y] | Array<[x, y]>` (default: `1`) - extruded geometry radius, or separate x/y radii, or array of separate x/y radii for every path position (ie. taper).
-- options.closed: `boolean` (default: `false`) - is the path closed.
-- options.closedShape: `boolean` (default: `true`) - is the shape path closed.
-- options.caps: `boolean` (default: `false`) - add caps at the end.
-- options.initialNormal: `Array` (default: `null`) - provide a starting normal for the frames. Default to the direction of the minimum tangent component.
+  Other flat per-vertex attributes (eg. `vertexColors`) are copied to the swept geometry. Path attributes win over shape attributes of the same name.
+
+- options.radius: `[x, y]` (default: `[1, 1]`) - extruded geometry x/y radii.
+- options.closed: `boolean | "auto"` (default: `"auto"`) - is the path closed. `"auto"` closes paths ending on their first index or position (compared exactly), dropping that last one.
+- options.closedShape: `boolean | "auto"` (default: `"auto"`) - are the shape polylines closed. `"auto"` closes polylines ending on their first index or position.
+- options.capStart: `boolean` (default: `true`) - add a cap at the start of open paths, for closed shapes.
+- options.capEnd: `boolean` (default: `true`) - add a cap at the end of open paths, for closed shapes.
+- options.capMapping: `Function` (default: shape `uvs` or `mappings.circumferential`) - overrides the cap uvs with a [primitive-geometry](https://github.com/dmnsgn/primitive-geometry) mapping.
+- options.creaseAngle: `number` (default: `Math.PI / 6`) - shape turns sharper than this angle (in radians) keep hard wall edges.
+- options.vMapping: `"length" | "index"` (default: `"length"`) - v from the distance along the path or from the path position index.
+- options.frameOptions: `Object` (default: `{}`) - [frenet-serret-frames](https://github.com/dmnsgn/frenet-serret-frames) options (`mode`, `initialNormal`, `finalNormal`, `twist`) used when the path has no frames. `closed` follows `options.closed`.
 - options.withFrames: `boolean` (default: `false`) - compute tangents and binormals.
 
-- out: `{ positions: TypedArray, normals?: TypedArray, tangents?: TypedArray, binormals?: TypedArray }` (default: `{}`) – a geometry object with pre-allocated typed array with each attributes being a multiple of `shape length * path vertices count + (caps ? 2 : 0)`.
+- out: `{ positions: TypedArray, normals: TypedArray, uvs: TypedArray, cells: TypedArray, tangents?: TypedArray, binormals?: TypedArray }` (default: `{}`) – a previously swept geometry to write into, reusing its arrays: same path, shape and options.
 
 **Returns**
 
-geometry: `{ positions: TypedArray, normals: TypedArray, uvs: TypedArray, cells: TypedArray, tangents?: TypedArray, binormals: TypedArray }` - the extruded geometry with optional tangents and binormals.
+geometry: `{ positions: TypedArray, normals: TypedArray, uvs: TypedArray, cells: TypedArray, tangents?: TypedArray, binormals?: TypedArray }` - the swept geometry with optional tangents and binormals, and copied attributes. Closed paths end on a copy of their first ring for the v seam.
 
 ## License
 
