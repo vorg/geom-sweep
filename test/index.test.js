@@ -90,6 +90,59 @@ describe("sweep", () => {
     assert.deepEqual(closing.cells, closed.cells);
   });
 
+  describe("path cells", () => {
+    const shape = { positions: circle(16, 1, true) };
+    const count = 32;
+    const positions = circle(count, R);
+
+    it("close paths ending on their first index", () => {
+      const byIndex = sweep(
+        { positions, cells: [[...range(0, count), 0]] },
+        shape,
+      );
+      const byOption = sweep({ positions }, shape, { closed: true });
+      assertArrayClose(assert, byIndex.positions, byOption.positions);
+      assert.deepEqual(byIndex.cells, byOption.cells);
+    });
+
+    it("order the path and its attributes", () => {
+      const vertexColors = Float32Array.from(
+        { length: count * 4 },
+        (_, i) => Math.floor(i / 4) / count,
+      );
+      const order = range(0, count).reverse();
+      const reordered = (array, size) =>
+        Float32Array.from(
+          order.flatMap((i) => [...array.subarray(i * size, i * size + size)]),
+        );
+      const byCell = sweep(
+        { positions, vertexColors, cells: [order] },
+        shape,
+        noCaps,
+      );
+      const byPositions = sweep(
+        {
+          positions: reordered(positions, 3),
+          vertexColors: reordered(vertexColors, 4),
+        },
+        shape,
+        noCaps,
+      );
+      assertArrayClose(assert, byCell.positions, byPositions.positions);
+      assertArrayClose(assert, byCell.vertexColors, byPositions.vertexColors);
+    });
+
+    it("sweep the first polyline only", () => {
+      const first = range(0, count / 2);
+      const single = sweep({ positions, cells: [first] }, shape);
+      const several = sweep(
+        { positions, cells: [first, range(count / 2, count / 2)] },
+        shape,
+      );
+      assertArrayClose(assert, several.positions, single.positions);
+    });
+  });
+
   it("doesn't write to the path geometry", () => {
     const path = { positions: line(4) };
     sweep(path, { positions: circle(8, 1, true) });

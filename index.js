@@ -32,23 +32,48 @@ const GENERATED_ATTRIBUTES = [
   "cells",
 ];
 
-// Own object: computing frames never writes to the path geometry
-const getPath = (geometry, closed) => {
+// Own object: computing frames never writes to the path geometry. Follows
+// the first polyline of the path cells, if any, other ones are ignored.
+const gatherPath = (geometry, closed) => {
+  const vertexCount = geometry.positions.length / 3;
+  const cell = geometry.cells?.[0]?.length ? geometry.cells[0] : null;
+  const count = cell ? cell.length : vertexCount;
+  const first = cell ? cell[0] : 0;
+  const last = cell ? cell[count - 1] : count - 1;
+
+  // Repeated first index or position
+  const isClosing =
+    count > 1 &&
+    avec3.equals(geometry.positions, first, geometry.positions, last);
+  const pathCount = isClosing && closed !== false ? count - 1 : count;
+  const sourceIndices = Uint32Array.from({ length: pathCount }, (_, i) =>
+    cell ? cell[i] : i,
+  );
+
   const path = {};
   for (const name of PATH_ATTRIBUTES) {
-    if (geometry[name]) path[name] = geometry[name];
-  }
+    const source = geometry[name];
+    if (!source) continue;
 
-  const count = path.positions.length / 3;
-  const isClosing =
-    count > 1 && avec3.equals(path.positions, 0, path.positions, count - 1);
-  if (isClosing && closed !== false) {
-    for (const [name, attribute] of Object.entries(path)) {
-      path[name] = attribute.slice(0, (attribute.length / count) * (count - 1));
+    const size = source.length / vertexCount;
+    if (!cell) {
+      path[name] =
+        pathCount === count ? source : source.slice(0, pathCount * size);
+      continue;
+    }
+    path[name] = new source.constructor(pathCount * size);
+    for (let i = 0; i < pathCount; i++) {
+      for (let k = 0; k < size; k++) {
+        path[name][i * size + k] = source[sourceIndices[i] * size + k];
+      }
     }
   }
 
-  return { path, closed: closed === "auto" ? isClosing : closed };
+  return {
+    path,
+    closed: closed === "auto" ? isClosing : closed,
+    sourceIndices,
+  };
 };
 
 const setRingTransform = (path, radius, i) => {
@@ -116,7 +141,11 @@ function sweep(geometry, shape, options, out = {}) {
     ...options,
   };
 
-  const { path, closed: isClosed } = getPath(geometry, closed);
+  const {
+    path,
+    closed: isClosed,
+    sourceIndices,
+  } = gatherPath(geometry, closed);
 
   if (!path.binormals || path.binormals.length !== path.positions.length) {
     delete path.normals;
@@ -177,8 +206,8 @@ function sweep(geometry, shape, options, out = {}) {
   ]) {
     out[name] ||= new source.constructor(size * attributeSize);
   }
-  // Path vertex of every vertex in a ring or cap
-  const pathIndices = new Uint32Array(Math.max(columnCount, shapeCount));
+  // Source path vertex of every vertex in a ring or cap
+  const ringSourceIndices = new Uint32Array(Math.max(columnCount, shapeCount));
 
   out.positions ||= new Float32Array(size * 3);
   out.normals ||= new Float32Array(size * 3);
@@ -229,8 +258,14 @@ function sweep(geometry, shape, options, out = {}) {
       columnCount,
       columns.shapeIndices,
     );
-    pathIndices.fill(i);
-    copyAttributes(out, pathAttributes, ringOffset, columnCount, pathIndices);
+    ringSourceIndices.fill(sourceIndices[i]);
+    copyAttributes(
+      out,
+      pathAttributes,
+      ringOffset,
+      columnCount,
+      ringSourceIndices,
+    );
   }
 
   // Tilt normals along the tangent to stay perpendicular to the walls between
@@ -317,13 +352,13 @@ function sweep(geometry, shape, options, out = {}) {
       }
 
       copyAttributes(out, shapeAttributes, vertexOffset, shapeCount);
-      pathIndices.fill(ring);
+      ringSourceIndices.fill(sourceIndices[ring]);
       copyAttributes(
         out,
         pathAttributes,
         vertexOffset,
         shapeCount,
-        pathIndices,
+        ringSourceIndices,
       );
 
       vertexOffset += shapeCount;
