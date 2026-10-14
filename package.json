@@ -45,9 +45,11 @@
   },
   "devDependencies": {
     "es-module-shims": "^2.8.4",
+    "geom-edges": "^2.0.0",
     "pex-cam": "^3.0.1",
     "pex-gpu": "^0.0.4",
     "pex-gui": "^4.0.1",
+    "primitive-geometry": "^3.2.1",
     "spline-points": "^0.2.1"
   },
   "packageManager": "npm@11.3.0",

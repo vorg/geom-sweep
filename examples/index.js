@@ -1,110 +1,291 @@
 import sweep from "../index.js";
 
-import createContext from "pex-context";
-import { avec3, avec4, mat4 } from "pex-math";
+import * as gpu from "pex-gpu";
+import { avec3, mat4 } from "pex-math";
 import createGUI from "pex-gui";
 import { perspective as createCamera, orbiter as createOrbiter } from "pex-cam";
+import computeFrenetSerretFrames from "frenet-serret-frames";
+import {
+  annulusPath,
+  circlePath,
+  crossPath,
+  disc,
+  squarePath,
+  starPath,
+} from "primitive-geometry";
+import edges from "geom-edges";
 import splinePoints from "spline-points";
 
+const toItems = (names) => names.map((name, value) => ({ name, value }));
+
+// All in the XY plane, swept along the path tangent
+const SHAPES = {
+  circle: () => circlePath({ closed: true }),
+  square: () => squarePath({ closed: true }),
+  star: () => starPath({ closed: true }),
+  cross: () => crossPath({ closed: true }),
+  "annulus (hole)": () => annulusPath({ closed: true }),
+  "disc (triangles)": () => disc(),
+  "star (open)": () => starPath(),
+  "arc (open)": () => circlePath({ theta: Math.PI }),
+};
+
+const PATHS = {
+  circle: {
+    loop: true,
+    points: () =>
+      Array.from({ length: 50 }, (_, i) => {
+        const t = (i / 50) * 2 * Math.PI;
+        return [Math.cos(t), Math.sin(t), 0];
+      }),
+  },
+  knot: {
+    loop: true,
+    points: () =>
+      Array.from({ length: 64 }, (_, i) => {
+        const t = (Math.PI * 2 * i) / 64;
+        return [
+          (10 * (Math.cos(t) + Math.cos(3 * t)) +
+            Math.cos(2 * t) +
+            Math.cos(4 * t)) /
+            10,
+          (6 * Math.sin(t) + 10 * Math.sin(3 * t)) / 10,
+          (4 * Math.sin(3 * t) * Math.sin((5 * t) / 2) +
+            4 * Math.sin(4 * t) -
+            2 * Math.sin(6 * t)) /
+            10,
+        ];
+      }),
+  },
+  helix: {
+    loop: false,
+    points: () =>
+      Array.from({ length: 48 }, (_, i) => {
+        const t = (Math.PI * 6 * i) / 47;
+        return [Math.cos(t), (i / 47) * 2 - 1, Math.sin(t)];
+      }),
+  },
+};
+
+const CLOSED = ["auto", true, false];
+
 const State = {
-  closed: false,
-  closedShape: true,
-  caps: false,
+  closed: 0,
+  closedShape: 0,
   withFrames: true,
-  radius: 0.1,
+  // primitive-geometry shapes fit a unit square
+  radius: 0.2,
 
   taper: false,
   smoothPath: true,
-  typedArray: true,
-  shape: 0,
-  shapes: ["square", "star"],
-  path: 1,
-  paths: ["circle", "knot"],
+  shape: 2,
+  shapes: Object.keys(SHAPES),
+  path: 2,
+  paths: Object.keys(PATHS),
 
   frame: 0,
   frames: ["none", "path", "swept"],
-  mode: 2,
-  shadings: ["normals", "simple lighting", "standard derivative", "uvs"],
+  mode: 0,
+  shadings: ["simple lighting", "normals", "standard derivative", "uvs"],
+  wireframe: false,
 };
 
-const ctx = createContext({
-  type: "webgl",
-  element: document.querySelector("main"),
-  pixelRatio: devicePixelRatio,
-});
+const ctx = await gpu.createContext();
+
 const camera = createCamera({
   fov: Math.PI / 3,
-  aspect: ctx.gl.drawingBufferWidth / ctx.gl.drawingBufferHeight,
+  aspect: ctx.width / ctx.height,
   near: 0.1,
   far: 100,
   position: [0, 0, 4],
 });
-const orbiter = createOrbiter({ camera });
+createOrbiter({ camera, element: ctx.canvas });
 
-let cmdOptions = {};
-let cmdLineOptions = {};
+const projection = mat4.create();
 
-const segmentLength = 1 / 10;
+const shader = /* wgsl */ `
+struct Uniforms {
+  projection: mat4x4f,
+  view: mat4x4f,
+  mode: f32,
+}
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+struct VertexIn {
+  @location(0) position: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) uv: vec2f,
+}
+struct VertexOut {
+  @builtin(position) position: vec4f,
+  @location(0) worldPosition: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) uv: vec2f,
+}
+
+@vertex
+fn vertexMain(input: VertexIn) -> VertexOut {
+  var output: VertexOut;
+  output.worldPosition = input.position;
+  output.normal = input.normal;
+  output.uv = input.uv;
+  output.position = uniforms.projection * uniforms.view * vec4f(input.position, 1.0);
+  return output;
+}
+
+@fragment
+fn fragmentMain(input: VertexOut, @builtin(front_facing) frontFacing: bool) -> @location(0) vec4f {
+  let normal = normalize(input.normal);
+  var color = normal * 0.5 + 0.5;
+  if (uniforms.mode == 0.0) {
+    let lambert = max((dot(normal, normalize(vec3f(1.0, -1.0, 1.0))) + 0.1) / 1.1, 0.0);
+    color = pow(vec3f(0.1) + lambert * pow(color, vec3f(2.2)), vec3f(1.0 / 2.2));
+  } else if (uniforms.mode == 2.0) {
+    // Face normal from the triangle winding: disagrees with flipped normals
+    let faceNormal = normalize(cross(dpdx(input.worldPosition), dpdy(input.worldPosition)));
+    color = faceNormal * 0.5 + 0.5;
+  } else if (uniforms.mode == 3.0) {
+    color = vec3f(fract(input.uv), 0.0);
+  }
+  // Back faces show through open shapes and inside-out solids
+  if (!frontFacing) {
+    color = mix(color, vec3f(1.0, 0.0, 0.0), 0.6);
+  }
+  return vec4f(color, 1.0);
+}
+`;
+
+const lineShader = /* wgsl */ `
+struct Uniforms {
+  projection: mat4x4f,
+  view: mat4x4f,
+}
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+struct VertexOut {
+  @builtin(position) position: vec4f,
+  @location(0) color: vec3f,
+}
+
+@vertex
+fn vertexMain(@location(0) position: vec3f, @location(1) color: vec3f) -> VertexOut {
+  var output: VertexOut;
+  output.color = color;
+  output.position = uniforms.projection * uniforms.view * vec4f(position, 1.0);
+  return output;
+}
+
+@fragment
+fn fragmentMain(input: VertexOut) -> @location(0) vec4f {
+  return vec4f(input.color, 1.0);
+}
+`;
+
+const wireframeShader = /* wgsl */ `
+struct Uniforms {
+  projection: mat4x4f,
+  view: mat4x4f,
+}
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+@vertex
+fn vertexMain(@location(0) position: vec3f) -> @builtin(position) vec4f {
+  return uniforms.projection * uniforms.view * vec4f(position, 1.0);
+}
+
+@fragment
+fn fragmentMain() -> @location(0) vec4f {
+  return vec4f(1.0);
+}
+`;
+
+const pass = { clearValue: [0.2, 0.2, 0.2, 1], depthClearValue: 1 };
+
+const drawMesh = gpu.defineCommand({
+  label: "drawMesh",
+  pipeline: {
+    shader,
+    depthWriteEnabled: true,
+    cullMode: "none",
+    // Pushed back so the lines win the depth test: WebGPU only biases
+    // triangles
+    depthBias: 1,
+    depthBiasSlopeScale: 1,
+  },
+  uniforms: { projection, view: camera.viewMatrix, mode: State.mode },
+});
+
+const linePipeline = {
+  shader: lineShader,
+  topology: "line-list",
+  depthWriteEnabled: true,
+};
+const lineUniforms = { projection, view: camera.viewMatrix };
+const drawWireframe = gpu.defineCommand({
+  label: "drawWireframe",
+  pipeline: { ...linePipeline, shader: wireframeShader },
+  uniforms: lineUniforms,
+});
+const drawFrames = gpu.defineCommand({
+  label: "drawFrames",
+  pipeline: linePipeline,
+  uniforms: lineUniforms,
+});
+
+const FRAME_COLORS = {
+  tangents: [1, 0, 0],
+  normals: [0, 1, 0],
+  binormals: [0, 0, 1],
+};
+
+const getFrameLines = ({ positions, ...frames }, scale) => {
+  const count = positions.length / 3;
+  const lines = new Float32Array(count * 6 * 3);
+  const colors = new Float32Array(count * 6 * 3);
+  let vertex = 0;
+  for (const [name, color] of Object.entries(FRAME_COLORS)) {
+    if (!frames[name]) continue;
+    for (let i = 0; i < count; i++) {
+      avec3.set(lines, vertex, positions, i);
+      avec3.set(lines, vertex + 1, positions, i);
+      avec3.addScaled(lines, vertex + 1, frames[name], i, scale);
+      avec3.set(colors, vertex, color, 0);
+      avec3.set(colors, vertex + 1, color, 0);
+      vertex += 2;
+    }
+  }
+  return {
+    position: lines.subarray(0, vertex * 3),
+    color: colors.subarray(0, vertex * 3),
+  };
+};
+
+const createVertexBuffers = (data) =>
+  Object.fromEntries(
+    Object.entries(data).map(([name, array]) => [
+      name,
+      gpu.createBuffer(ctx, { usage: "vertex", data: array }),
+    ]),
+  );
+
+const disposeBuffers = (cmd) => {
+  for (const buffer of [...Object.values(cmd.attributes ?? {}), cmd.indices]) {
+    buffer?.[Symbol.dispose]();
+  }
+  cmd.attributes = undefined;
+  cmd.indices = undefined;
+};
 
 const updateGeometry = () => {
-  // Shape
-  let shape = [];
-
-  if (State.shapes[State.shape] === "square") {
-    shape = [
-      [1, 1, 0],
-      [-1, 1, 0],
-      [-1, -1, 0],
-      [1, -1, 0],
-    ];
-  } else if (State.shapes[State.shape] === "star") {
-    const starBranchCount = 5;
-    for (let i = 0; i < starBranchCount * 2; i++) {
-      const r = (2 * ((i % 2) + 1)) / 2;
-      const t = (Math.PI * 2 * i) / (starBranchCount * 2);
-
-      shape.push([r * Math.sin(t), r * Math.cos(t), 0]);
-    }
-  }
-
-  // Path
-  let path = [];
-
-  if (State.paths[State.path] === "circle") {
-    for (let i = 0; i < 50; i++) {
-      path.push([
-        Math.cos((i / 50) * 2 * Math.PI),
-        Math.sin((i / 50) * 2 * Math.PI),
-        0,
-      ]);
-      // path.push([
-      //   0.3 * Math.sin((i / 10) * 4 * Math.PI),
-      //   2 * (i / 10 - 0.5),
-      //   0.3 * Math.cos((i / 10) * 4 * Math.PI),
-      // ]);
-    }
-  } else if (State.paths[State.path] === "knot") {
-    const n = 64;
-    for (var i = 0; i < n; i++) {
-      const t = (Math.PI * 2 * i) / n;
-      const x =
-        10 * (Math.cos(t) + Math.cos(3 * t)) +
-        Math.cos(2 * t) +
-        Math.cos(4 * t);
-      const y = 6 * Math.sin(t) + 10 * Math.sin(3 * t);
-      const z =
-        4 * Math.sin(3 * t) * Math.sin((5 * t) / 2) +
-        4 * Math.sin(4 * t) -
-        2 * Math.sin(6 * t);
-      path.push([x * segmentLength, y * segmentLength, z * segmentLength]);
-    }
-  }
-
+  const { loop, points } = PATHS[State.paths[State.path]];
   const smoothPath = State.smoothPath
-    ? splinePoints(path, { segmentLength, closed: true })
-    : path;
+    ? splinePoints(points(), { segmentLength: 0.1, closed: loop })
+    : points();
+  // Closed by repeating the first point, as "auto" expects
+  const path = loop ? [...smoothPath, smoothPath[0]] : smoothPath;
+
   const radius = State.taper
-    ? smoothPath.map((p, i, points) => [
+    ? path.map((_, i, points) => [
         State.radius / 2 +
           (State.radius / 2) * Math.sin((i / points.length) * Math.PI * 4),
         State.radius,
@@ -112,65 +293,53 @@ const updateGeometry = () => {
     : State.radius;
 
   const geometry = {
-    positions: State.typedArray
-      ? new Float32Array(smoothPath.flat())
-      : smoothPath,
+    positions: new Float32Array(path.flat()),
   };
   console.time("Sweeping time");
-  const sweptGeometry = sweep(geometry, shape, {
-    ...State,
+  const sweptGeometry = sweep(geometry, SHAPES[State.shapes[State.shape]](), {
     radius,
+    closed: CLOSED[State.closed],
+    closedShape: CLOSED[State.closedShape],
+    withFrames: State.withFrames,
     initialNormal: State.paths[State.path] === "circle" && [0, 0, 1],
   });
   console.timeEnd("Sweeping time");
   console.log(sweptGeometry);
 
-  cmdOptions = {
-    attributes: {
-      aPosition: ctx.vertexBuffer(sweptGeometry.positions),
-      aNormal: ctx.vertexBuffer(sweptGeometry.normals),
-      aUv: ctx.vertexBuffer(sweptGeometry.uvs),
-    },
-    indices: ctx.indexBuffer(sweptGeometry.cells),
-  };
+  // Wireframe shares the mesh position buffer
+  disposeBuffers(drawMesh);
+  drawWireframe.indices?.[Symbol.dispose]();
+  disposeBuffers(drawFrames);
 
-  // Frame lines
+  drawMesh.attributes = createVertexBuffers({
+    position: sweptGeometry.positions,
+    normal: sweptGeometry.normals,
+    uv: sweptGeometry.uvs,
+  });
+  drawMesh.indices = gpu.createBuffer(ctx, {
+    usage: "index",
+    data: sweptGeometry.cells,
+  });
+
+  drawWireframe.attributes = { position: drawMesh.attributes.position };
+  drawWireframe.indices = gpu.createBuffer(ctx, {
+    usage: "index",
+    data: Uint32Array.from(edges(sweptGeometry.cells).flat()),
+  });
+
+  // sweep doesn't write frames to the path: compute them for display
   if (State.frames[State.frame] !== "none") {
-    const g = State.frames[State.frame] === "swept" ? sweptGeometry : geometry;
-    const size = g.positions.length / 3;
-    const tnbBuffer = new Float32Array(size * 3 * 6);
-    const colorBuffer = new Float32Array(size * 4 * 6);
-    const frameScale = State.radius * 2;
-    for (let i = 0; i < size; i++) {
-      avec3.set(tnbBuffer, i * 6 + 2, g.positions, i);
-      avec3.set(tnbBuffer, i * 6 + 3, g.positions, i);
-      avec3.addScaled(tnbBuffer, i * 6 + 3, g.normals, i, frameScale);
-
-      if (g.tangents) {
-        avec3.set(tnbBuffer, i * 6, g.positions, i);
-        avec3.set(tnbBuffer, i * 6 + 1, g.positions, i);
-        avec3.addScaled(tnbBuffer, i * 6 + 1, g.tangents, i, frameScale);
-      }
-      if (g.binormals) {
-        avec3.set(tnbBuffer, i * 6 + 4, g.positions, i);
-        avec3.set(tnbBuffer, i * 6 + 5, g.positions, i);
-        avec3.addScaled(tnbBuffer, i * 6 + 5, g.binormals, i, frameScale);
-      }
-
-      avec4.set(colorBuffer, i * 6 + 0, [1, 0, 0, 1], 0);
-      avec4.set(colorBuffer, i * 6 + 1, [0.5, 0, 0, 1], 0);
-      avec4.set(colorBuffer, i * 6 + 2, [0, 1, 0, 1], 0);
-      avec4.set(colorBuffer, i * 6 + 3, [0, 0.5, 0, 1], 0);
-      avec4.set(colorBuffer, i * 6 + 4, [0, 0, 1, 1], 0);
-      avec4.set(colorBuffer, i * 6 + 5, [0, 0, 0.5, 1], 0);
-    }
-    cmdLineOptions = {
-      attributes: {
-        aPosition: ctx.vertexBuffer(tnbBuffer),
-        aColor: ctx.vertexBuffer(colorBuffer),
-      },
-      count: size * 6,
-    };
+    const frames =
+      State.frames[State.frame] === "swept"
+        ? sweptGeometry
+        : computeFrenetSerretFrames(
+            { positions: new Float32Array(smoothPath.flat()) },
+            { closed: loop },
+          );
+    drawFrames.attributes = createVertexBuffers(
+      // As long as the swept shape radius
+      getFrameLines(frames, State.radius * 0.5),
+    );
   }
 };
 
@@ -178,188 +347,68 @@ updateGeometry();
 
 const gui = createGUI(ctx);
 gui.addColumn("Sweep Options");
-gui.addParam("closed", State, "closed", undefined, updateGeometry);
-gui.addParam("closedShape", State, "closedShape", undefined, updateGeometry);
-gui.addParam("caps", State, "caps", undefined, updateGeometry);
+gui.addRadioList(
+  "closed",
+  State,
+  "closed",
+  toItems(CLOSED.map(String)),
+  updateGeometry,
+);
+gui.addRadioList(
+  "closedShape",
+  State,
+  "closedShape",
+  toItems(CLOSED.map(String)),
+  updateGeometry,
+);
 gui.addParam("withFrames", State, "withFrames", undefined, updateGeometry);
-gui.addParam("radius", State, "radius", { min: 0, max: 0.5 }, updateGeometry);
+gui.addParam("radius", State, "radius", { min: 0, max: 1 }, updateGeometry);
 
 gui.addColumn("Example Options");
 gui.addRadioList(
   "Shape",
   State,
   "shape",
-  State.shapes.map((name, value) => ({ name, value })),
-  updateGeometry
+  toItems(State.shapes),
+  updateGeometry,
 );
-gui.addRadioList(
-  "Path",
-  State,
-  "path",
-  State.paths.map((name, value) => ({ name, value })),
-  updateGeometry
-);
+gui.addRadioList("Path", State, "path", toItems(State.paths), updateGeometry);
 gui.addParam("taper", State, "taper", undefined, updateGeometry);
 gui.addParam("smoothPath", State, "smoothPath", undefined, updateGeometry);
-gui.addParam("typedArray", State, "typedArray", undefined, updateGeometry);
 
 gui.addColumn("Rendering");
 gui.addRadioList(
   "Frames",
   State,
   "frame",
-  State.frames.map((name, value) => ({ name, value })),
-  updateGeometry
+  toItems(State.frames),
+  updateGeometry,
 );
-gui.addRadioList(
-  "Mode",
-  State,
-  "mode",
-  State.shadings.map((name, value) => ({ name, value }))
-);
+gui.addRadioList("Mode", State, "mode", toItems(State.shadings));
+gui.addParam("wireframe", State, "wireframe");
 
-const modelMatrix = mat4.create();
-
-const drawMesh = {
-  pipeline: ctx.pipeline({
-    depthTest: true,
-    // cullFace: true,
-    vert: /* glsl */ `
-attribute vec3 aPosition;
-attribute vec3 aNormal;
-attribute vec2 aUv;
-
-uniform mat4 uProjectionMatrix;
-uniform mat4 uViewMatrix;
-uniform mat4 uModelMatrix;
-uniform mat4 uInvViewMatrix;
-
-varying vec3 vPositionWorld;
-varying vec3 vNormal;
-varying vec2 vUv;
-varying vec4 vColor;
-
-void main () {
-  mat4 modelViewMatrix = uViewMatrix * uModelMatrix;
-  vPositionWorld = (uModelMatrix * vec4(aPosition, 1.0)).xyz;
-  vNormal = aNormal;
-  vColor = vec4(aNormal * 0.5 + 0.5, 1.0);
-  vUv = aUv;
-  gl_Position = uProjectionMatrix * modelViewMatrix * vec4(aPosition, 1.0);
-}`,
-    frag: /* glsl */ `#extension GL_OES_standard_derivatives : enable
-precision highp float;
-
-uniform float uMode;
-
-varying vec3 vPositionWorld;
-varying vec3 vNormal;
-varying vec2 vUv;
-varying vec4 vColor;
-
-const float gamma = 2.2;
-vec3 toLinear(vec3 v) {
-  return pow(v, vec3(gamma));
-}
-vec3 toGamma(vec3 v) {
-  return pow(v, vec3(1.0 / gamma));
-}
-
-void main () {
-  if (uMode == 0.0) gl_FragColor = vColor;
-
-  if (uMode == 1.0) {
-    vec3 ambientColor = vec3(0.1, 0.1, 0.1);
-    vec3 lightPos = vec3(1.0, -1.0, 1.0);
-    float uWrap = 0.1;
-
-    vec3 L = normalize(lightPos);
-    vec3 N = normalize(vNormal);
-    float NdotL = max(0.0, (dot(N, L) + uWrap) / (1.0 + uWrap));
-    vec3 ambient = toLinear(ambientColor.rgb);
-    vec3 diffuse = toLinear(vColor.rgb);
-
-    gl_FragColor = vec4(toGamma(ambient + NdotL * diffuse), 1.0);
-  }
-
-  if (uMode == 2.0) {
-    vec3 fdx = vec3(dFdx(vPositionWorld.x), dFdx(vPositionWorld.y), dFdx(vPositionWorld.z));
-    vec3 fdy = vec3(dFdy(vPositionWorld.x), dFdy(vPositionWorld.y), dFdy(vPositionWorld.z));
-    vec3 normal = normalize(cross(fdx, fdy));
-    gl_FragColor = vec4(normal * 0.5 + 0.5, 1.0);
-  }
-
-  if (uMode == 3.0) gl_FragColor = vec4(vUv.xy, 0.0, 1.0);
-}
-    `,
-  }),
-  uniforms: {
-    uProjectionMatrix: camera.projectionMatrix,
-    uViewMatrix: camera.viewMatrix,
-    uModelMatrix: modelMatrix,
-    uMode: 2,
-  },
-};
-
-const drawLine = {
-  pipeline: ctx.pipeline({
-    depthTest: true,
-    vert: /* glsl */ `
-attribute vec3 aPosition;
-attribute vec4 aColor;
-
-uniform mat4 uProjectionMatrix;
-uniform mat4 uViewMatrix;
-uniform mat4 uModelMatrix;
-
-varying vec4 vColor;
-
-void main () {
-  vColor = aColor;
-  mat4 modelViewMatrix = uViewMatrix * uModelMatrix;
-  gl_Position = uProjectionMatrix * modelViewMatrix * vec4(aPosition, 1.0);
-}`,
-    frag: /* glsl */ `
-precision highp float;
-
-varying vec4 vColor;
-
-void main () {
-  gl_FragColor.rgb = vColor.rgb;
-  gl_FragColor.a = 1.0;
-}`,
-    primitive: ctx.Primitive.Lines,
-  }),
-  uniforms: {
-    uProjectionMatrix: camera.projectionMatrix,
-    uViewMatrix: camera.viewMatrix,
-    uInvViewMatrix: camera.invViewMatrix,
-    uModelMatrix: mat4.create(),
-  },
-};
-
-const clearCmd = {
-  pass: ctx.pass({
-    clearColor: [0.2, 0.2, 0.2, 1],
-    clearDepth: 1,
-  }),
-};
-
-ctx.frame(() => {
-  ctx.submit(clearCmd);
-  ctx.submit(drawMesh, {
-    ...cmdOptions,
-    uniforms: {
-      uMode: State.mode,
-    },
-  });
-  if (State.frames[State.frame] !== "none") {
-    ctx.submit(drawLine, cmdLineOptions);
-  }
-
-  gui.draw();
+window.addEventListener("resize", () => {
+  gpu.resize(ctx, window.innerWidth, window.innerHeight);
 });
 
 window.addEventListener("keydown", ({ key }) => {
   if (key === "g") gui.enabled = !gui.enabled;
+});
+
+gpu.frame(ctx, () => {
+  mat4.perspectiveZO(
+    projection,
+    camera.fov,
+    ctx.width / ctx.height,
+    camera.near,
+    camera.far,
+  );
+  drawMesh.uniforms.mode = State.mode;
+
+  gpu.submit(ctx, { pass }, () => {
+    gpu.submit(ctx, drawMesh);
+    if (State.wireframe) gpu.submit(ctx, drawWireframe);
+    if (State.frames[State.frame] !== "none") gpu.submit(ctx, drawFrames);
+    gui.draw();
+  });
 });

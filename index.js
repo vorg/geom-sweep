@@ -1,49 +1,72 @@
 import { avec2, avec3, vec2, vec3, mat4 } from "pex-math";
 import computeFrenetSerretFrames from "frenet-serret-frames";
 import typedArrayConstructor from "typed-array-constructor";
+import { computeColumns, computeProfile, stitchRings } from "geom-extrude";
 
 const TEMP_MAT4 = mat4.create();
 const TEMP_RADIUS_VEC2 = vec2.create();
 const TEMP_VEC3 = vec3.create();
 
-function sweep(geometry, shapePath, options, out = {}) {
-  let {
+const FRAME_ATTRIBUTES = ["positions", "tangents", "normals", "binormals"];
+
+const toFlatArray = (array) =>
+  array[0]?.length ? new Float32Array(array.flat()) : array;
+
+// A copy: computing frames never writes to the path geometry
+const getPath = (geometry, closed) => {
+  const path = {};
+  for (const name of FRAME_ATTRIBUTES) {
+    if (geometry[name]) path[name] = toFlatArray(geometry[name]);
+  }
+
+  const count = path.positions.length / 3;
+  const isClosing =
+    count > 1 && avec3.equals(path.positions, 0, path.positions, count - 1);
+  if (isClosing && closed !== false) {
+    for (const name of Object.keys(path)) {
+      path[name] = path[name].slice(0, (count - 1) * 3);
+    }
+  }
+
+  return { path, closed: closed === "auto" ? isClosing : closed };
+};
+
+function sweep(geometry, shape, options, out = {}) {
+  const {
     radius = 1,
-    closed = false,
-    closedShape = true,
-    caps = false,
+    closed = "auto",
+    closedShape = "auto",
     initialNormal = null,
     withFrames = false,
   } = {
     ...options,
   };
-  closedShape &&= !(shapePath.length === 2);
-  caps &&= !closed;
 
-  const isFlatArray = !geometry.positions[0]?.length;
-  const isShapeFlatArray = !shapePath[0]?.length;
+  const { path, closed: isClosed } = getPath(geometry, closed);
 
-  if (!isFlatArray) {
-    geometry = { ...geometry };
-    geometry.positions &&= new Float32Array(geometry.positions.flat());
-    geometry.normals &&= new Float32Array(geometry.normals.flat());
-    geometry.tangents &&= new Float32Array(geometry.tangents.flat());
-    geometry.binormals &&= new Float32Array(geometry.binormals.flat());
+  if (!path.binormals || path.binormals.length !== path.positions.length) {
+    delete path.normals;
+    delete path.binormals;
+    computeFrenetSerretFrames(path, { closed: isClosed, initialNormal });
   }
 
-  if (
-    !geometry.binormals ||
-    geometry.binormals.length !== geometry.positions.length
-  ) {
-    computeFrenetSerretFrames(geometry, { closed, initialNormal });
-  }
+  const shapePositions = toFlatArray(shape.positions);
+  const { normal, loops } = computeProfile(
+    {
+      ...shape,
+      positions: shapePositions,
+      cells: shape.cells ?? [
+        Array.from({ length: shapePositions.length / 3 }, (_, i) => i),
+      ],
+    },
+    { closed: closedShape },
+  );
+  const columns = computeColumns(shapePositions, loops, normal);
 
-  const pathLength = geometry.positions.length / 3;
-  const numSegments = shapePath.length / (isShapeFlatArray ? 3 : 1);
-  const numFaces = closedShape ? numSegments : numSegments - 1;
-  const numFrameFaces = closed ? pathLength : pathLength - 1;
-
-  const size = numSegments * pathLength + (caps ? 2 : 0);
+  const ringCount = path.positions.length / 3;
+  const columnCount = columns.shapeIndices.length;
+  const stitchCount = isClosed ? ringCount : ringCount - 1;
+  const size = ringCount * columnCount;
 
   out.positions ||= new Float32Array(size * 3);
   out.normals ||= new Float32Array(size * 3);
@@ -52,22 +75,22 @@ function sweep(geometry, shapePath, options, out = {}) {
     out.tangents ||= new Float32Array(size * 3);
     out.binormals ||= new Float32Array(size * 3);
   }
-  const cellsSize =
-    numFrameFaces * numFaces * 6 + (caps ? 2 : 0) * numSegments * 3;
-  out.cells ||= new (typedArrayConstructor(size))(cellsSize);
+  out.cells ||= new (typedArrayConstructor(size))(
+    (columns.cells.length / 2) * stitchCount * 6,
+  );
 
-  for (let i = 0; i < pathLength; i++) {
-    TEMP_MAT4[0] = geometry.binormals[i * 3];
-    TEMP_MAT4[1] = geometry.binormals[i * 3 + 1];
-    TEMP_MAT4[2] = geometry.binormals[i * 3 + 2];
+  for (let i = 0; i < ringCount; i++) {
+    TEMP_MAT4[0] = path.binormals[i * 3];
+    TEMP_MAT4[1] = path.binormals[i * 3 + 1];
+    TEMP_MAT4[2] = path.binormals[i * 3 + 2];
 
-    TEMP_MAT4[4] = geometry.normals[i * 3];
-    TEMP_MAT4[5] = geometry.normals[i * 3 + 1];
-    TEMP_MAT4[6] = geometry.normals[i * 3 + 2];
+    TEMP_MAT4[4] = path.normals[i * 3];
+    TEMP_MAT4[5] = path.normals[i * 3 + 1];
+    TEMP_MAT4[6] = path.normals[i * 3 + 2];
 
-    TEMP_MAT4[8] = geometry.tangents[i * 3];
-    TEMP_MAT4[9] = geometry.tangents[i * 3 + 1];
-    TEMP_MAT4[10] = geometry.tangents[i * 3 + 2];
+    TEMP_MAT4[8] = path.tangents[i * 3];
+    TEMP_MAT4[9] = path.tangents[i * 3 + 1];
+    TEMP_MAT4[10] = path.tangents[i * 3 + 2];
 
     if (radius) {
       // TODO: support geometry.radius?
@@ -77,97 +100,37 @@ function sweep(geometry, shapePath, options, out = {}) {
       TEMP_RADIUS_VEC2[1] = r[1] !== undefined ? r[1] : TEMP_RADIUS_VEC2[0];
     }
 
-    for (let j = 0; j < numSegments; j++) {
-      const aIndex = i * numSegments + j;
+    for (let j = 0; j < columnCount; j++) {
+      const vertex = i * columnCount + j;
 
       // Positions
-      if (isShapeFlatArray) {
-        avec3.set(TEMP_VEC3, 0, shapePath, j);
-      } else {
-        vec3.set(TEMP_VEC3, shapePath[j]);
-      }
-
+      avec3.set(TEMP_VEC3, 0, shapePositions, columns.shapeIndices[j]);
       if (radius) {
         TEMP_VEC3[0] *= TEMP_RADIUS_VEC2[0];
         TEMP_VEC3[1] *= TEMP_RADIUS_VEC2[1];
       }
       vec3.multMat4(TEMP_VEC3, TEMP_MAT4);
-      avec3.add(TEMP_VEC3, 0, geometry.positions, i);
-      avec3.set(out.positions, aIndex, TEMP_VEC3, 0);
+      avec3.add(TEMP_VEC3, 0, path.positions, i);
+      avec3.set(out.positions, vertex, TEMP_VEC3, 0);
 
       // Normals
-      avec3.sub(TEMP_VEC3, 0, geometry.positions, i);
+      avec3.set(TEMP_VEC3, 0, columns.normals, j);
+      vec3.multMat4(TEMP_VEC3, TEMP_MAT4);
       vec3.normalize(TEMP_VEC3);
-      avec3.set(out.normals, aIndex, TEMP_VEC3, 0);
+      avec3.set(out.normals, vertex, TEMP_VEC3, 0);
 
       // UVs
-      avec2.set2(out.uvs, aIndex, j / numFaces, i / numFrameFaces);
+      avec2.set2(out.uvs, vertex, columns.u[j], i / stitchCount);
 
       if (withFrames) {
-        // Tangents
-        avec3.set3(
-          out.tangents,
-          aIndex,
-          TEMP_MAT4[8],
-          TEMP_MAT4[9],
-          TEMP_MAT4[10],
-        );
-
-        // Binormals
-        avec3.set(out.binormals, aIndex, out.tangents, aIndex);
-        avec3.cross(out.binormals, aIndex, out.normals, aIndex);
-      }
-
-      // Cells
-      if (j < numFaces) {
-        const a = i * numSegments + ((j + 1) % numSegments) + numSegments;
-        const b = i * numSegments + ((j + 1) % numSegments);
-        const c = i * numSegments + j;
-        const d = i * numSegments + j + numSegments;
-        const cellIndex = i * numFaces * 2 + j * 2;
-
-        if (i < pathLength - 1) {
-          avec3.set3(out.cells, cellIndex, a, b, c);
-          avec3.set3(out.cells, cellIndex + 1, a, c, d);
-        } else if (closed) {
-          avec3.set3(out.cells, cellIndex, a % size, b % size, c % size);
-          avec3.set3(out.cells, cellIndex + 1, a % size, c % size, d % size);
-        }
+        avec3.set(out.tangents, vertex, path.tangents, i);
+        avec3.set(out.binormals, vertex, out.tangents, vertex);
+        avec3.cross(out.binormals, vertex, out.normals, vertex);
       }
     }
   }
 
-  if (caps) {
-    const firstPosition = geometry.positions.slice(0, 3);
-    const lastPosition = geometry.positions.slice(-3);
-    const firstTangent = geometry.tangents.slice(0, 3);
-    const lastTangent = geometry.tangents.slice(-3);
-
-    const a = size - 2;
-    const b = size - 1;
-
-    avec3.set(out.positions, a, firstPosition, 0);
-    avec3.set(out.positions, b, lastPosition, 0);
-    avec3.set(out.normals, a, vec3.scale(vec3.copy(firstTangent), -1), 0);
-    avec3.set(out.normals, b, vec3.scale(vec3.copy(lastTangent), -1), 0);
-    // avec2.set2(out.uvs, a, 0, 0);
-    avec2.set2(out.uvs, b, 1, 1);
-
-    const startIndex = numFrameFaces * numFaces * 2;
-    const segmentIndex = pathLength * numSegments;
-    for (let j = 0; j < numSegments; j++) {
-      const cellIndex = startIndex + j * 2;
-
-      avec3.set3(out.cells, cellIndex, j, (j + 1) % numSegments, a);
-      avec3.set3(
-        out.cells,
-        cellIndex + 1,
-        b,
-        segmentIndex - numSegments + ((j + 1) % numSegments),
-        segmentIndex - numSegments + j,
-      );
-    }
-  }
+  stitchRings(out.cells, columns, { ringCount, closed: isClosed });
 
   return out;
 }
