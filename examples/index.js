@@ -11,32 +11,15 @@ import {
   circlePath,
   crossPath,
   disc,
+  ellipsePath,
   squarePath,
   starPath,
 } from "primitive-geometry";
 import edges from "geom-edges";
+import merge from "geom-merge";
 import splinePoints from "spline-points";
 
 const toItems = (names) => names.map((name, value) => ({ name, value }));
-
-// Shapes merged with their cells offset: polylines or flat triangles
-const merge = (...shapes) => {
-  let offset = 0;
-  const cells = [];
-  for (const shape of shapes) {
-    const isFlat = typeof shape.cells[0] === "number";
-    for (const cell of shape.cells) {
-      cells.push(isFlat ? cell + offset : Array.from(cell, (i) => i + offset));
-    }
-    offset += shape.positions.length / 3;
-  }
-  return {
-    positions: Float32Array.from(
-      shapes.flatMap(({ positions }) => [...positions]),
-    ),
-    cells: typeof cells[0] === "number" ? Uint32Array.from(cells) : cells,
-  };
-};
 
 // All in the XY plane, swept along the path tangent
 const SHAPES = {
@@ -46,30 +29,44 @@ const SHAPES = {
   cross: () => crossPath({ closed: true }),
   "annulus (hole)": () => annulusPath({ closed: true }),
   "nested annulus": () =>
-    merge(
+    merge([
       annulusPath({ closed: true }),
       annulusPath({ closed: true, radius: 0.15, innerRadius: 0.075 }),
-    ),
+    ]),
   "nested annulus (triangles)": () =>
-    merge(annulus(), annulus({ radius: 0.15, innerRadius: 0.075 })),
+    merge([annulus(), annulus({ radius: 0.15, innerRadius: 0.075 })]),
   "disc (triangles)": () => disc(),
   "star (open)": () => starPath(),
   "arc (open)": () => circlePath({ theta: Math.PI }),
 };
 
+// 2D path positions placed in 3D
+const toPoints = ({ positions }, toPoint) =>
+  Array.from({ length: positions.length / 3 }, (_, i) =>
+    toPoint(positions[i * 3], positions[i * 3 + 1]),
+  );
+
+// Default taper: x radius oscillating from 0 to 1 along a polyline, y radius
+// constant
+const taper = (u) => [0.5 + 0.5 * Math.sin(u * Math.PI * 4), 1];
+
+// Polylines swept separately, each one a path cell, with an optional taper
+// along it
 const PATHS = {
-  circle: {
-    loop: true,
-    points: () =>
-      Array.from({ length: 50 }, (_, i) => {
-        const t = (i / 50) * 2 * Math.PI;
-        return [Math.cos(t), Math.sin(t), 0];
-      }),
-  },
-  knot: {
-    loop: true,
-    points: () =>
-      Array.from({ length: 64 }, (_, i) => {
+  circle: () => [
+    {
+      loop: true,
+      points: toPoints(circlePath({ radius: 1, segments: 50 }), (x, y) => [
+        x,
+        y,
+        0,
+      ]),
+    },
+  ],
+  knot: () => [
+    {
+      loop: true,
+      points: Array.from({ length: 64 }, (_, i) => {
         const t = (Math.PI * 2 * i) / 64;
         return [
           (10 * (Math.cos(t) + Math.cos(3 * t)) +
@@ -83,14 +80,46 @@ const PATHS = {
             10,
         ];
       }),
-  },
-  helix: {
-    loop: false,
-    points: () =>
-      Array.from({ length: 48 }, (_, i) => {
+    },
+  ],
+  helix: () => [
+    {
+      loop: false,
+      points: Array.from({ length: 48 }, (_, i) => {
         const t = (Math.PI * 6 * i) / 47;
         return [Math.cos(t), (i / 47) * 2 - 1, Math.sin(t)];
       }),
+    },
+  ],
+  // Links interlocked in alternate planes, tapered flat in their plane at
+  // both ends to fit through each other. Outer links are halved into open arcs
+  // through their neighbour. Default frames put the binormal (x radius) out of
+  // the XY plane but in the XZ plane.
+  chain: () => {
+    const count = 5;
+    // [thetaOffset, theta]
+    const arcs = {
+      0: [-Math.PI / 2, Math.PI],
+      [count - 1]: [Math.PI / 2, Math.PI],
+    };
+    return Array.from({ length: count }, (_, i) => {
+      const [thetaOffset, theta] = arcs[i] ?? [0, Math.PI * 2];
+      const flat = (u) => 1 - 0.6 * Math.cos(thetaOffset + u * theta) ** 4;
+      const x = (i - (count - 1) / 2) * 0.75;
+      return {
+        loop: !arcs[i],
+        points: toPoints(
+          ellipsePath({
+            sy: 0.6,
+            segments: arcs[i] ? 12 : 24,
+            theta,
+            thetaOffset,
+          }),
+          (a, b) => (i % 2 ? [x + a, 0, b] : [x + a, b, 0]),
+        ),
+        radius: i % 2 ? (u) => [flat(u), 1] : (u) => [1, flat(u)],
+      };
+    });
   },
 };
 
@@ -311,22 +340,32 @@ const disposeBuffers = (cmd) => {
 };
 
 const updateGeometry = () => {
-  const { loop, points } = PATHS[State.paths[State.path]];
-  const smoothPath = State.smoothPath
-    ? splinePoints(points(), { segmentLength: 0.1, closed: loop })
-    : points();
-  // Closed by repeating the first point, as "auto" expects
-  const path = loop ? [...smoothPath, smoothPath[0]] : smoothPath;
+  const polylines = PATHS[State.paths[State.path]]().map(
+    ({ loop, points, radius }) => {
+      const smoothPoints = State.smoothPath
+        ? splinePoints(points, { segmentLength: 0.1, closed: loop })
+        : points;
+      // Closed by repeating the first point, as "auto" expects
+      return {
+        loop,
+        smoothPoints,
+        path: loop ? [...smoothPoints, smoothPoints[0]] : smoothPoints,
+        radius: State.taper ? (radius ?? taper) : undefined,
+      };
+    },
+  );
 
-  const geometry = {
-    positions: new Float32Array(path.flat()),
-  };
-  // x radius oscillating from 0 to 1 along the path, y radius constant
-  if (State.taper) {
-    geometry.radii = Float32Array.from({ length: path.length * 2 }, (_, i) =>
-      i % 2 ? 1 : 0.5 + 0.5 * Math.sin((i / 2 / path.length) * Math.PI * 4),
-    );
-  }
+  const geometry = merge(
+    polylines.map(({ path, radius }) => ({
+      positions: new Float32Array(path.flat()),
+      cells: [path.map((_, i) => i)],
+      ...(radius && {
+        radii: Float32Array.from(
+          path.flatMap((_, i) => radius(i / (path.length - 1))),
+        ),
+      }),
+    })),
+  );
   const closed = CLOSED[State.closed];
   const frameOptions = {
     mode: FRAME_MODES[State.frameMode],
@@ -368,26 +407,30 @@ const updateGeometry = () => {
     data: Uint32Array.from(edges(sweptGeometry.cells).flat()),
   });
 
+  if (State.frames[State.frame] === "none") return;
+
   // sweep doesn't write frames to the path: compute them for display, from
   // the same points and options, the repeated first point dropped if closed
-  if (State.frames[State.frame] !== "none") {
-    const isClosed = closed === "auto" ? loop : closed;
-    const frames =
-      State.frames[State.frame] === "swept"
-        ? sweptGeometry
-        : computeFrenetSerretFrames(
-            {
-              positions: new Float32Array(
-                (loop && isClosed ? smoothPath : path).flat(),
-              ),
-            },
-            { ...frameOptions, closed: isClosed },
-          );
-    drawFrames.attributes = createVertexBuffers(
-      // As long as the swept shape radius
-      getFrameLines(frames, State.radius * 0.5),
-    );
-  }
+  const frames =
+    State.frames[State.frame] === "swept"
+      ? sweptGeometry
+      : merge(
+          polylines.map(({ loop, smoothPoints, path }) => {
+            const isClosed = closed === "auto" ? loop : closed;
+            return computeFrenetSerretFrames(
+              {
+                positions: new Float32Array(
+                  (loop && isClosed ? smoothPoints : path).flat(),
+                ),
+              },
+              { ...frameOptions, closed: isClosed },
+            );
+          }),
+        );
+  drawFrames.attributes = createVertexBuffers(
+    // As long as the swept shape radius
+    getFrameLines(frames, State.radius * 0.5),
+  );
 };
 
 updateGeometry();
@@ -454,7 +497,7 @@ window.addEventListener("resize", () => {
   gpu.resize(ctx, window.innerWidth, window.innerHeight);
 });
 
-window.addEventListener("keydown", ({ key }) => {
+addEventListener("keydown", ({ key }) => {
   if (key === "g") gui.enabled = !gui.enabled;
 });
 

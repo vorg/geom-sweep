@@ -54,6 +54,16 @@ describe("sweep", () => {
     );
   });
 
+  it("sweeps forced closed segments into ribbons", () => {
+    const geometry = sweep(
+      { positions: line(4) },
+      { positions: [-1, 0, 0, 1, 0, 0] },
+      { closedShape: true },
+    );
+    assert.equal(geometry.positions.length, 4 * 2 * 3);
+    assert.equal(geometry.cells.length, 3 * 6);
+  });
+
   it("keeps open shapes open", () => {
     const { openEdges } = analyze(torus({ positions: circle(64) }));
     assert.ok(openEdges > 0);
@@ -132,14 +142,42 @@ describe("sweep", () => {
       assertArrayClose(assert, byCell.vertexColors, byPositions.vertexColors);
     });
 
-    it("sweep the first polyline only", () => {
-      const first = range(0, count / 2);
-      const single = sweep({ positions, cells: [first] }, shape);
-      const several = sweep(
-        { positions, cells: [first, range(count / 2, count / 2)] },
-        shape,
-      );
-      assertArrayClose(assert, several.positions, single.positions);
+    it("sweep every polyline separately", () => {
+      // Closed then open polyline, tapered differently
+      const loop = [...range(0, count / 2), 0];
+      const open = range(count / 2, count / 2);
+      const path = {
+        positions,
+        radii: Float32Array.from({ length: count * 2 }, (_, i) =>
+          i < count ? 0.1 : 0.2,
+        ),
+        vertexColors: Float32Array.from({ length: count }, (_, i) => i),
+      };
+      const options = { withFrames: true };
+      const several = sweep({ ...path, cells: [loop, open] }, shape, options);
+      const first = sweep({ ...path, cells: [loop] }, shape, options);
+      const second = sweep({ ...path, cells: [open] }, shape, options);
+
+      const vertexOffset = first.positions.length / 3;
+      for (const name of [
+        "positions",
+        "normals",
+        "uvs",
+        "tangents",
+        "binormals",
+        "vertexColors",
+      ]) {
+        assertArrayClose(assert, several[name], [
+          ...first[name],
+          ...second[name],
+        ]);
+      }
+      assert.deepEqual(Array.from(several.cells), [
+        ...first.cells,
+        ...Array.from(second.cells, (index) => index + vertexOffset),
+      ]);
+      // The closed polyline is a torus, the open one capped
+      assert.equal(analyze(several).openEdges, 0);
     });
   });
 

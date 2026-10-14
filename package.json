@@ -39,13 +39,14 @@
   },
   "dependencies": {
     "frenet-serret-frames": "^4.0.0",
-    "geom-extrude": "^2.0.0",
+    "geom-extrude": "^2.0.1",
     "pex-math": "^4.4.0",
     "typed-array-constructor": "^1.0.2"
   },
   "devDependencies": {
     "es-module-shims": "^2.8.4",
     "geom-edges": "^2.0.0",
+    "geom-merge": "^3.1.0",
     "pex-cam": "^3.0.1",
     "pex-gpu": "^0.0.4",
     "pex-gui": "^4.0.1",
