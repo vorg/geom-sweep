@@ -327,19 +327,22 @@ const updateGeometry = () => {
       i % 2 ? 1 : 0.5 + 0.5 * Math.sin((i / 2 / path.length) * Math.PI * 4),
     );
   }
+  const closed = CLOSED[State.closed];
+  const frameOptions = {
+    mode: FRAME_MODES[State.frameMode],
+    twist: State.twist,
+    initialNormal: State.paths[State.path] === "circle" ? [0, 0, 1] : null,
+  };
+
   console.time("Sweeping time");
   const sweptGeometry = sweep(geometry, SHAPES[State.shapes[State.shape]](), {
     radius: [State.radius, State.radius],
-    closed: CLOSED[State.closed],
+    closed,
     closedShape: CLOSED[State.closedShape],
     capStart: State.capStart,
     capEnd: State.capEnd,
     withFrames: State.withFrames,
-    frameOptions: {
-      mode: FRAME_MODES[State.frameMode],
-      twist: State.twist,
-      initialNormal: State.paths[State.path] === "circle" ? [0, 0, 1] : null,
-    },
+    frameOptions,
   });
   console.timeEnd("Sweeping time");
   console.log(sweptGeometry);
@@ -365,14 +368,20 @@ const updateGeometry = () => {
     data: Uint32Array.from(edges(sweptGeometry.cells).flat()),
   });
 
-  // sweep doesn't write frames to the path: compute them for display
+  // sweep doesn't write frames to the path: compute them for display, from
+  // the same points and options, the repeated first point dropped if closed
   if (State.frames[State.frame] !== "none") {
+    const isClosed = closed === "auto" ? loop : closed;
     const frames =
       State.frames[State.frame] === "swept"
         ? sweptGeometry
         : computeFrenetSerretFrames(
-            { positions: new Float32Array(smoothPath.flat()) },
-            { closed: loop },
+            {
+              positions: new Float32Array(
+                (loop && isClosed ? smoothPath : path).flat(),
+              ),
+            },
+            { ...frameOptions, closed: isClosed },
           );
     drawFrames.attributes = createVertexBuffers(
       // As long as the swept shape radius

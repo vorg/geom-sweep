@@ -201,7 +201,9 @@ function sweep(geometry, shape, options, out = {}) {
     shape,
     shapeCount,
     GENERATED_ATTRIBUTES,
-  ).filter(({ name }) => pathAttributes.every((path) => path.name !== name));
+  ).filter(({ name }) =>
+    pathAttributes.every((attribute) => attribute.name !== name),
+  );
   for (const { name, source, size: attributeSize } of [
     ...pathAttributes,
     ...shapeAttributes,
@@ -210,6 +212,11 @@ function sweep(geometry, shape, options, out = {}) {
   }
   // Source path vertex of every vertex in a ring or cap
   const ringSourceIndices = new Uint32Array(Math.max(columnCount, shapeCount));
+  const copyPathAttributes = (vertexOffset, count, i) => {
+    if (!pathAttributes.length) return;
+    ringSourceIndices.fill(sourceIndices[i], 0, count);
+    copyAttributes(out, pathAttributes, vertexOffset, count, ringSourceIndices);
+  };
 
   out.positions ||= new Float32Array(size * 3);
   out.normals ||= new Float32Array(size * 3);
@@ -260,14 +267,7 @@ function sweep(geometry, shape, options, out = {}) {
       columnCount,
       columns.shapeIndices,
     );
-    ringSourceIndices.fill(sourceIndices[i]);
-    copyAttributes(
-      out,
-      pathAttributes,
-      ringOffset,
-      columnCount,
-      ringSourceIndices,
-    );
+    copyPathAttributes(ringOffset, columnCount, i);
   }
 
   // Tilt normals along the tangent to stay perpendicular to the walls between
@@ -332,13 +332,16 @@ function sweep(geometry, shape, options, out = {}) {
       for (let k = 0; k < shapeCount; k++) {
         const vertex = vertexOffset + k;
         setPosition(out, vertex, shapePositions, k, path, ring);
+        // Given path frames may not be unit length
         avec3.set(out.normals, vertex, path.tangents, ring);
+        avec3.normalize(out.normals, vertex);
         avec3.scale(out.normals, vertex, side);
         avec2.set(out.uvs, vertex, capUvs, k);
 
         if (withFrames) {
           // Cap tangents lie in the cap plane
           avec3.set(out.tangents, vertex, path.binormals, ring);
+          avec3.normalize(out.tangents, vertex);
           avec3.set(out.binormals, vertex, out.tangents, vertex);
           avec3.cross(out.binormals, vertex, out.normals, vertex);
         }
@@ -354,14 +357,7 @@ function sweep(geometry, shape, options, out = {}) {
       }
 
       copyAttributes(out, shapeAttributes, vertexOffset, shapeCount);
-      ringSourceIndices.fill(sourceIndices[ring]);
-      copyAttributes(
-        out,
-        pathAttributes,
-        vertexOffset,
-        shapeCount,
-        ringSourceIndices,
-      );
+      copyPathAttributes(vertexOffset, shapeCount, ring);
 
       vertexOffset += shapeCount;
     }

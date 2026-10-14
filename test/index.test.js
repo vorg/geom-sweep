@@ -339,6 +339,34 @@ describe("sweep", () => {
       assert.ok(analyze(start).openEdges > 0);
     });
 
+    it("normalizes given path frames", () => {
+      const repeat = (vector) =>
+        Float32Array.from({ length: 9 }, (_, i) => vector[i % 3]);
+      const shapeCount = 9;
+      const geometry = sweep(
+        {
+          positions: line(3),
+          tangents: repeat([0, 0, 2]),
+          normals: repeat([0, 2, 0]),
+          binormals: repeat([2, 0, 0]),
+        },
+        { positions: circle(8, 1, true) },
+        { withFrames: true },
+      );
+      const capStart = geometry.positions.length / 3 - shapeCount * 2;
+      for (const [offset, side] of [
+        [capStart, -1],
+        [capStart + shapeCount, 1],
+      ]) {
+        for (let i = offset; i < offset + shapeCount; i++) {
+          const at = (name) => geometry[name].subarray(i * 3, i * 3 + 3);
+          assertArrayClose(assert, at("normals"), [0, 0, side]);
+          assertArrayClose(assert, at("tangents"), [1, 0, 0]);
+          assert.ok(close(Math.hypot(...at("binormals")), 1));
+        }
+      }
+    });
+
     it("skips closed paths and open shapes", () => {
       const shape = { positions: circle(64, 1, true) };
       assert.equal(
