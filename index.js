@@ -147,7 +147,11 @@ function sweep(geometry, shape, options, out = {}) {
     sourceIndices,
   } = gatherPath(geometry, closed);
 
-  if (!path.binormals || path.binormals.length !== path.positions.length) {
+  const hasPerVertexAttribute = (name) =>
+    path[name]?.length === path.positions.length;
+  if (!["tangents", "normals", "binormals"].every(hasPerVertexAttribute)) {
+    // Given tangents are kept: frames are built around them
+    if (!hasPerVertexAttribute("tangents")) delete path.tangents;
     delete path.normals;
     delete path.binormals;
     computeFrenetSerretFrames(path, { ...frameOptions, closed: isClosed });

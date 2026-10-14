@@ -143,6 +143,17 @@ describe("sweep", () => {
     });
   });
 
+  it("computes incomplete path frames", () => {
+    const shape = { positions: circle(8, 1, true) };
+    const positions = line(4);
+    const computed = sweep({ positions }, shape);
+    const partial = sweep(
+      { positions, binormals: new Float32Array(positions.length) },
+      shape,
+    );
+    assertArrayClose(assert, partial.positions, computed.positions);
+  });
+
   it("doesn't write to the path geometry", () => {
     const path = { positions: line(4) };
     sweep(path, { positions: circle(8, 1, true) });
