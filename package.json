@@ -24,27 +24,33 @@
   ],
   "sideEffects": false,
   "type": "module",
-  "exports": "./index.js",
-  "main": "index.js",
-  "types": "types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "main": "./index.js",
+  "types": "./types/index.d.ts",
   "scripts": {
     "dev": "snowdev dev",
     "release": "snowdev release"
   },
   "dependencies": {
-    "frenet-serret-frames": "^3.1.0",
-    "pex-math": "^4.1.0",
-    "typed-array-constructor": "^1.0.1"
+    "frenet-serret-frames": "^4.0.0",
+    "pex-math": "^4.4.0",
+    "typed-array-constructor": "^1.0.2"
   },
   "devDependencies": {
-    "es-module-shims": "^1.8.3",
-    "pex-cam": "^3.0.0-alpha.1",
-    "pex-context": "^3.0.0-alpha.5",
-    "pex-gui": "^3.0.0",
+    "es-module-shims": "^2.8.4",
+    "pex-cam": "^3.0.1",
+    "pex-gpu": "^0.0.4",
+    "pex-gui": "^4.0.1",
     "spline-points": "^0.2.1"
   },
+  "packageManager": "npm@11.3.0",
   "engines": {
-    "node": ">=20.0.0",
-    "npm": ">=9.6.4"
+    "node": ">=24.0.0",
+    "snowdev": ">=3.0.0-alpha.3"
   }
 }
