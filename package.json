@@ -34,10 +34,12 @@
   "types": "./types/index.d.ts",
   "scripts": {
     "dev": "snowdev dev",
-    "release": "snowdev release"
+    "release": "snowdev release",
+    "test": "node --test"
   },
   "dependencies": {
     "frenet-serret-frames": "^4.0.0",
+    "geom-extrude": "^1.0.0",
     "pex-math": "^4.4.0",
     "typed-array-constructor": "^1.0.2"
   },
