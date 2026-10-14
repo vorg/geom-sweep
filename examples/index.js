@@ -6,6 +6,7 @@ import createGUI from "pex-gui";
 import { perspective as createCamera, orbiter as createOrbiter } from "pex-cam";
 import computeFrenetSerretFrames from "frenet-serret-frames";
 import {
+  annulus,
   annulusPath,
   circlePath,
   crossPath,
@@ -18,6 +19,25 @@ import splinePoints from "spline-points";
 
 const toItems = (names) => names.map((name, value) => ({ name, value }));
 
+// Shapes merged with their cells offset: polylines or flat triangles
+const merge = (...shapes) => {
+  let offset = 0;
+  const cells = [];
+  for (const shape of shapes) {
+    const isFlat = typeof shape.cells[0] === "number";
+    for (const cell of shape.cells) {
+      cells.push(isFlat ? cell + offset : Array.from(cell, (i) => i + offset));
+    }
+    offset += shape.positions.length / 3;
+  }
+  return {
+    positions: Float32Array.from(
+      shapes.flatMap(({ positions }) => [...positions]),
+    ),
+    cells: typeof cells[0] === "number" ? Uint32Array.from(cells) : cells,
+  };
+};
+
 // All in the XY plane, swept along the path tangent
 const SHAPES = {
   circle: () => circlePath({ closed: true }),
@@ -25,6 +45,13 @@ const SHAPES = {
   star: () => starPath({ closed: true }),
   cross: () => crossPath({ closed: true }),
   "annulus (hole)": () => annulusPath({ closed: true }),
+  "nested annulus": () =>
+    merge(
+      annulusPath({ closed: true }),
+      annulusPath({ closed: true, radius: 0.15, innerRadius: 0.075 }),
+    ),
+  "nested annulus (triangles)": () =>
+    merge(annulus(), annulus({ radius: 0.15, innerRadius: 0.075 })),
   "disc (triangles)": () => disc(),
   "star (open)": () => starPath(),
   "arc (open)": () => circlePath({ theta: Math.PI }),
@@ -71,11 +98,14 @@ const CLOSED = ["auto", true, false];
 
 const FRAME_MODES = ["bishop", "frenet"];
 
+const V_MAPPINGS = ["length", "index"];
+
 const State = {
   closed: 0,
   closedShape: 0,
   capStart: true,
   capEnd: true,
+  vMapping: 0,
   withFrames: true,
   frameMode: 0,
   twist: 0,
@@ -147,11 +177,12 @@ fn fragmentMain(input: VertexOut, @builtin(front_facing) frontFacing: bool) -> @
     let lambert = max((dot(normal, normalize(vec3f(1.0, -1.0, 1.0))) + 0.1) / 1.1, 0.0);
     color = pow(vec3f(0.1) + lambert * pow(color, vec3f(2.2)), vec3f(1.0 / 2.2));
   } else if (uniforms.mode == 2.0) {
-    // Face normal from the triangle winding: disagrees with flipped normals
-    let faceNormal = normalize(cross(dpdx(input.worldPosition), dpdy(input.worldPosition)));
+    // Face normal from the triangle winding: disagrees with flipped normals.
+    // WebGPU framebuffer y points down, reversing dpdy compared to WebGL.
+    let faceNormal = normalize(cross(dpdy(input.worldPosition), dpdx(input.worldPosition)));
     color = faceNormal * 0.5 + 0.5;
   } else if (uniforms.mode == 3.0) {
-    color = vec3f(fract(input.uv), 0.0);
+    color = vec3f(input.uv, 0.0);
   }
   // Back faces show through open shapes and inside-out solids
   if (!frontFacing) {
@@ -290,24 +321,23 @@ const updateGeometry = () => {
   // Closed by repeating the first point, as "auto" expects
   const path = loop ? [...smoothPath, smoothPath[0]] : smoothPath;
 
-  const radius = State.taper
-    ? path.map((_, i, points) => [
-        State.radius / 2 +
-          (State.radius / 2) * Math.sin((i / points.length) * Math.PI * 4),
-        State.radius,
-      ])
-    : State.radius;
-
   const geometry = {
     positions: new Float32Array(path.flat()),
   };
+  // x radius oscillating from 0 to 1 along the path, y radius constant
+  if (State.taper) {
+    geometry.radii = Float32Array.from({ length: path.length * 2 }, (_, i) =>
+      i % 2 ? 1 : 0.5 + 0.5 * Math.sin((i / 2 / path.length) * Math.PI * 4),
+    );
+  }
   console.time("Sweeping time");
   const sweptGeometry = sweep(geometry, SHAPES[State.shapes[State.shape]](), {
-    radius,
+    radius: [State.radius, State.radius],
     closed: CLOSED[State.closed],
     closedShape: CLOSED[State.closedShape],
     capStart: State.capStart,
     capEnd: State.capEnd,
+    vMapping: V_MAPPINGS[State.vMapping],
     withFrames: State.withFrames,
     frameOptions: {
       mode: FRAME_MODES[State.frameMode],
@@ -375,6 +405,13 @@ gui.addRadioList(
 );
 gui.addParam("capStart", State, "capStart", undefined, updateGeometry);
 gui.addParam("capEnd", State, "capEnd", undefined, updateGeometry);
+gui.addRadioList(
+  "vMapping",
+  State,
+  "vMapping",
+  toItems(V_MAPPINGS),
+  updateGeometry,
+);
 gui.addParam("withFrames", State, "withFrames", undefined, updateGeometry);
 gui.addRadioList(
   "frameOptions.mode",

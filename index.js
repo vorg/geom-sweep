@@ -5,6 +5,8 @@ import {
   computeCapUvs,
   computeColumns,
   computeProfile,
+  copyAttributes,
+  getVertexAttributes,
   stitchRings,
 } from "geom-extrude";
 
@@ -12,24 +14,37 @@ const TEMP_MAT4 = mat4.create();
 const TEMP_RADIUS_VEC2 = vec2.create();
 const TEMP_VEC3 = vec3.create();
 
-const FRAME_ATTRIBUTES = ["positions", "tangents", "normals", "binormals"];
+const PATH_ATTRIBUTES = [
+  "positions",
+  "tangents",
+  "normals",
+  "binormals",
+  "radii",
+];
 
-const toFlatArray = (array) =>
-  array[0]?.length ? new Float32Array(array.flat()) : array;
+// Never copied: sweep generates them
+const GENERATED_ATTRIBUTES = [
+  "positions",
+  "normals",
+  "tangents",
+  "binormals",
+  "uvs",
+  "cells",
+];
 
-// A copy: computing frames never writes to the path geometry
+// Own object: computing frames never writes to the path geometry
 const getPath = (geometry, closed) => {
   const path = {};
-  for (const name of FRAME_ATTRIBUTES) {
-    if (geometry[name]) path[name] = toFlatArray(geometry[name]);
+  for (const name of PATH_ATTRIBUTES) {
+    if (geometry[name]) path[name] = geometry[name];
   }
 
   const count = path.positions.length / 3;
   const isClosing =
     count > 1 && avec3.equals(path.positions, 0, path.positions, count - 1);
   if (isClosing && closed !== false) {
-    for (const name of Object.keys(path)) {
-      path[name] = path[name].slice(0, (count - 1) * 3);
+    for (const [name, attribute] of Object.entries(path)) {
+      path[name] = attribute.slice(0, (attribute.length / count) * (count - 1));
     }
   }
 
@@ -49,14 +64,10 @@ const setRingTransform = (path, radius, i) => {
   TEMP_MAT4[9] = path.tangents[i * 3 + 1];
   TEMP_MAT4[10] = path.tangents[i * 3 + 2];
 
-  if (radius) {
-    // TODO: support geometry.radius?
-    // TODO: there is ambiguity between [r, r] and [rx, ry]
-    const r = radius.length ? radius[i] : radius;
-    TEMP_RADIUS_VEC2[0] = r[0] !== undefined ? r[0] : r;
-    TEMP_RADIUS_VEC2[1] = r[1] !== undefined ? r[1] : TEMP_RADIUS_VEC2[0];
-  } else {
-    vec2.set(TEMP_RADIUS_VEC2, [1, 1]);
+  vec2.set(TEMP_RADIUS_VEC2, radius);
+  if (path.radii) {
+    TEMP_RADIUS_VEC2[0] *= path.radii[i * 2];
+    TEMP_RADIUS_VEC2[1] *= path.radii[i * 2 + 1];
   }
 };
 
@@ -69,14 +80,36 @@ const setPosition = (out, vertex, shapePositions, shapeIndex, path, i) => {
   avec3.set(out.positions, vertex, TEMP_VEC3, 0);
 };
 
+const computeRingVs = (path, count, vMapping) => {
+  const pathCount = path.positions.length / 3;
+  const vs = new Float32Array(count);
+  for (let i = 1; i < count; i++) {
+    vs[i] =
+      vs[i - 1] +
+      (vMapping === "index"
+        ? 1
+        : avec3.distance(
+            path.positions,
+            (i - 1) % pathCount,
+            path.positions,
+            i % pathCount,
+          ));
+  }
+  const total = vs[count - 1] || 1;
+  for (let i = 0; i < count; i++) vs[i] /= total;
+  return vs;
+};
+
 function sweep(geometry, shape, options, out = {}) {
   const {
-    radius = 1,
+    radius = [1, 1],
     closed = "auto",
     closedShape = "auto",
     capStart = true,
     capEnd = true,
     capMapping,
+    creaseAngle,
+    vMapping = "length",
     frameOptions,
     withFrames = false,
   } = {
@@ -91,25 +124,30 @@ function sweep(geometry, shape, options, out = {}) {
     computeFrenetSerretFrames(path, { ...frameOptions, closed: isClosed });
   }
 
-  const shapePositions = toFlatArray(shape.positions);
+  const { positions: shapePositions } = shape;
   const profile = computeProfile(
     {
       ...shape,
-      positions: shapePositions,
       cells: shape.cells ?? [
         Array.from({ length: shapePositions.length / 3 }, (_, i) => i),
       ],
     },
     { closed: closedShape },
   );
-  const columns = computeColumns(shapePositions, profile.loops, profile.normal);
+  const columns = computeColumns(
+    shapePositions,
+    profile.loops,
+    profile.normal,
+    creaseAngle,
+  );
 
   const ringCount = path.positions.length / 3;
   const lastRing = ringCount - 1;
+  // Closed paths end on a copy of their first ring: the v seam
+  const wallRingCount = ringCount + (isClosed ? 1 : 0);
   const columnCount = columns.shapeIndices.length;
-  const stitchCount = isClosed ? ringCount : ringCount - 1;
-  const wallVertexCount = ringCount * columnCount;
-  const wallCellCount = (columns.cells.length / 2) * stitchCount * 6;
+  const wallVertexCount = wallRingCount * columnCount;
+  const wallCellCount = (columns.cells.length / 2) * (wallRingCount - 1) * 6;
 
   // Closed paths and open shapes have no ends to cap
   const caps =
@@ -122,6 +160,26 @@ function sweep(geometry, shape, options, out = {}) {
   const shapeCount = shapePositions.length / 3;
   const size = wallVertexCount + shapeCount * caps.length;
 
+  // Path attributes win over shape attributes of the same name
+  const pathAttributes = getVertexAttributes(
+    geometry,
+    geometry.positions.length / 3,
+    [...GENERATED_ATTRIBUTES, "radii"],
+  );
+  const shapeAttributes = getVertexAttributes(
+    shape,
+    shapeCount,
+    GENERATED_ATTRIBUTES,
+  ).filter(({ name }) => !pathAttributes.some((path) => path.name === name));
+  for (const { name, source, size: attributeSize } of [
+    ...pathAttributes,
+    ...shapeAttributes,
+  ]) {
+    out[name] ||= new source.constructor(size * attributeSize);
+  }
+  // Path vertex of every vertex in a ring or cap
+  const pathIndices = new Uint32Array(Math.max(columnCount, shapeCount));
+
   out.positions ||= new Float32Array(size * 3);
   out.normals ||= new Float32Array(size * 3);
   out.uvs ||= new Float32Array(size * 2);
@@ -133,11 +191,14 @@ function sweep(geometry, shape, options, out = {}) {
     wallCellCount + profile.cells.length * caps.length,
   );
 
-  for (let i = 0; i < ringCount; i++) {
+  const vs = computeRingVs(path, wallRingCount, vMapping);
+
+  for (let ring = 0; ring < wallRingCount; ring++) {
+    const i = ring % ringCount;
     setRingTransform(path, radius, i);
 
     for (let j = 0; j < columnCount; j++) {
-      const vertex = i * columnCount + j;
+      const vertex = ring * columnCount + j;
 
       setPosition(
         out,
@@ -157,8 +218,19 @@ function sweep(geometry, shape, options, out = {}) {
       avec3.set(out.normals, vertex, TEMP_VEC3, 0);
 
       // UVs
-      avec2.set2(out.uvs, vertex, columns.u[j], i / stitchCount);
+      avec2.set2(out.uvs, vertex, columns.u[j], vs[ring]);
     }
+
+    const ringOffset = ring * columnCount;
+    copyAttributes(
+      out,
+      shapeAttributes,
+      ringOffset,
+      columnCount,
+      columns.shapeIndices,
+    );
+    pathIndices.fill(i);
+    copyAttributes(out, pathAttributes, ringOffset, columnCount, pathIndices);
   }
 
   // Tilt normals along the tangent to stay perpendicular to the walls between
@@ -201,11 +273,18 @@ function sweep(geometry, shape, options, out = {}) {
     }
   }
 
-  stitchRings(out.cells, columns, { ringCount, closed: isClosed });
+  if (isClosed) {
+    const seam = ringCount * columnCount * 3;
+    for (const name of ["normals", "tangents", "binormals"]) {
+      out[name]?.copyWithin(seam, 0, columnCount * 3);
+    }
+  }
+
+  stitchRings(out.cells, columns, { ringCount: wallRingCount });
 
   if (caps.length) {
     const capUvs =
-      (!capMapping && shape.uvs && toFlatArray(shape.uvs)) ||
+      (!capMapping && shape.uvs) ||
       computeCapUvs(shapePositions, profile, capMapping);
     let vertexOffset = wallVertexCount;
     let cellIndex = wallCellCount;
@@ -236,6 +315,16 @@ function sweep(geometry, shape, options, out = {}) {
         out.cells[cellIndex++] = vertexOffset + cells[k + (side > 0 ? 2 : 1)];
         out.cells[cellIndex++] = vertexOffset + cells[k + (side > 0 ? 1 : 2)];
       }
+
+      copyAttributes(out, shapeAttributes, vertexOffset, shapeCount);
+      pathIndices.fill(ring);
+      copyAttributes(
+        out,
+        pathAttributes,
+        vertexOffset,
+        shapeCount,
+        pathIndices,
+      );
 
       vertexOffset += shapeCount;
     }

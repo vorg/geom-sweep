@@ -15,11 +15,6 @@ const line = (count, length = 1) =>
     i % 3 === 2 ? (Math.floor(i / 3) / (count - 1)) * length : 0,
   );
 
-const toNested = (flat) =>
-  Array.from({ length: flat.length / 3 }, (_, i) =>
-    Array.from(flat.subarray(i * 3, i * 3 + 3)),
-  );
-
 const range = (start, count) =>
   Array.from({ length: count }, (_, i) => start + i);
 
@@ -27,12 +22,15 @@ const range = (start, count) =>
 const polygonArea = (count, radius = 1) =>
   (count / 2) * radius * radius * Math.sin((Math.PI * 2) / count);
 
+// Walls only: vertices index rings of columns
+const noCaps = { capStart: false, capEnd: false };
+
 const R = 1;
 const r = 0.2;
 const pappus = (area) => 2 * Math.PI * R * area * r * r;
 const torus = (shape, options) =>
   sweep({ positions: circle(128, R) }, shape, {
-    radius: r,
+    radius: [r, r],
     closed: true,
     ...options,
   });
@@ -102,7 +100,7 @@ describe("sweep", () => {
     const geometry = sweep(
       { positions: line(5, 2) },
       { positions: circle(8, 1, true) },
-      { radius: 0.1 },
+      { radius: [0.1, 0.1] },
     );
     let maxZ = -Infinity;
     for (let i = 0; i < geometry.positions.length; i += 3) {
@@ -116,27 +114,12 @@ describe("sweep", () => {
     assert.ok(close(maxZ, 2));
   });
 
-  it("supports flat and nested arrays", () => {
-    const path = line(4);
-    const shape = circle(6, 1, true);
-    const flat = sweep({ positions: path }, { positions: shape });
-    const nested = sweep(
-      { positions: toNested(path) },
-      { positions: toNested(shape) },
-    );
-    assertArrayClose(assert, nested.positions, flat.positions);
-  });
-
   it("scales the shape per path point", () => {
-    const radius = [
-      [0.1, 0.1],
-      [0.2, 0.2],
-      [0.3, 0.3],
-    ];
+    const radii = [0.1, 0.1, 0.2, 0.2, 0.3, 0.3];
     const geometry = sweep(
-      { positions: line(3) },
+      { positions: line(3), radii },
       { positions: circle(8, 1, true) },
-      { radius },
+      { radius: [2, 2], ...noCaps },
     );
     for (let i = 0; i < geometry.positions.length / 3; i++) {
       const z = geometry.positions[i * 3 + 2];
@@ -144,7 +127,7 @@ describe("sweep", () => {
         geometry.positions[i * 3],
         geometry.positions[i * 3 + 1],
       );
-      assert.ok(close(distance, radius[Math.round(z * 2)][0]));
+      assert.ok(close(distance, 2 * radii[Math.round(z * 2) * 2]));
     }
   });
 
@@ -177,37 +160,35 @@ describe("sweep", () => {
     }
   };
 
-  // Walls only: vertices index rings of columns
-  const noCaps = { capStart: false, capEnd: false };
-
   describe("normals", () => {
     // Smooth circle: one column per point plus the u seam
     const shape = { positions: circle(128, 1, true) };
     const columnCount = 129;
-    const elliptical = (count) => Array(count).fill([0.3, 0.1]);
 
     for (const [name, path, radius] of [
-      ["uniform", line(64), 0.2],
-      ["elliptical", line(64), elliptical(64)],
+      ["uniform", { positions: line(64) }, [0.2, 0.2]],
+      ["elliptical", { positions: line(64) }, [0.3, 0.1]],
       [
         "tapered",
-        line(64),
-        Array.from({ length: 64 }, (_, i) => [0.05 + i * 0.005, 0.1]),
+        {
+          positions: line(64),
+          radii: Float32Array.from({ length: 128 }, (_, i) =>
+            i % 2 ? 0.1 : 0.05 + (i / 2) * 0.005,
+          ),
+        },
+        [1, 1],
       ],
-      ["curved", circle(256, 1, true), elliptical(256)],
+      ["curved", { positions: circle(256, 1, true) }, [0.3, 0.1]],
     ]) {
       it(`are perpendicular to ${name} walls`, () => {
-        const geometry = sweep({ positions: path }, shape, {
-          radius,
-          ...noCaps,
-        });
+        const geometry = sweep(path, shape, { radius, ...noCaps });
         assertPerpendicularNormals(geometry, columnCount, 0.01);
       });
     }
 
     it("are perpendicular to twisted walls", () => {
       const geometry = sweep({ positions: line(64) }, shape, {
-        radius: elliptical(64),
+        radius: [0.3, 0.1],
         frameOptions: { twist: Math.PI },
         ...noCaps,
       });
@@ -218,7 +199,10 @@ describe("sweep", () => {
   describe("caps", () => {
     const length = 2;
     const straight = (shape, options) =>
-      sweep({ positions: line(32, length) }, shape, { radius: r, ...options });
+      sweep({ positions: line(32, length) }, shape, {
+        radius: [r, r],
+        ...options,
+      });
     const prism = (area) => area * r * r * length;
 
     it("closes open paths into solids", () => {
@@ -245,16 +229,35 @@ describe("sweep", () => {
       assert.ok(close(volume, prism(area), 1e-3));
     });
 
+    it("caps nested loops: holes and islands", () => {
+      // Annulus with a smaller annulus inside its hole: depths 0 to 3
+      const count = 64;
+      const radii = [1, 0.75, 0.5, 0.25];
+      const geometry = straight({
+        positions: Float32Array.from(
+          radii.flatMap((radius) => [...circle(count, radius)]),
+        ),
+        cells: radii.map((_, i) => [...range(i * count, count), i * count]),
+      });
+      const { volume, openEdges, flippedNormals } = analyze(geometry);
+      assert.equal(openEdges, 0);
+      assert.equal(flippedNormals, 0);
+      const area =
+        polygonArea(count, 1) -
+        polygonArea(count, 0.75) +
+        polygonArea(count, 0.5) -
+        polygonArea(count, 0.25);
+      assert.ok(close(volume, prism(area), 1e-3));
+    });
+
     it("caps tapered ends with x/y radii", () => {
       // Linear x radius, constant y radius: the section area grows linearly
-      const radius = Array.from({ length: 32 }, (_, i) => [
-        0.1 + (0.2 * i) / 31,
-        0.2,
-      ]);
+      const radii = Float32Array.from({ length: 64 }, (_, i) =>
+        i % 2 ? 0.2 : 0.1 + (0.2 * (i / 2)) / 31,
+      );
       const geometry = sweep(
-        { positions: line(32, length) },
+        { positions: line(32, length), radii },
         { positions: circle(64, 1, true) },
-        { radius },
       );
       const { volume, openEdges, flippedNormals } = analyze(geometry);
       assert.equal(openEdges, 0);
@@ -300,6 +303,133 @@ describe("sweep", () => {
     });
   });
 
+  describe("uvs", () => {
+    const shape = { positions: circle(8, 1, true) };
+    // Unevenly spaced points: 0, 0.1 and 1 along z
+    const path = { positions: Float32Array.of(0, 0, 0, 0, 0, 0.1, 0, 0, 1) };
+    // Walls only: rings of equal column counts
+    const ringVs = ({ uvs }, rings) => {
+      const columnCount = uvs.length / 2 / rings;
+      return Array.from(
+        { length: rings },
+        (_, i) => uvs[i * columnCount * 2 + 1],
+      );
+    };
+
+    it("maps v by distance along the path", () => {
+      const geometry = sweep(path, shape, noCaps);
+      assertArrayClose(assert, ringVs(geometry, 3), [0, 0.1, 1]);
+    });
+
+    it("maps v by ring index", () => {
+      const geometry = sweep(path, shape, { vMapping: "index", ...noCaps });
+      assertArrayClose(assert, ringVs(geometry, 3), [0, 0.5, 1]);
+    });
+
+    it("ends closed paths on a v = 1 copy of the first ring", () => {
+      const rings = 32;
+      const geometry = sweep(
+        { positions: circle(rings, R) },
+        { positions: circle(16, 1, true) },
+        { radius: [r, r], closed: true },
+      );
+      const vs = ringVs(geometry, rings + 1);
+      assert.equal(vs[0], 0);
+      assert.equal(vs.at(-1), 1);
+      for (let i = 1; i < vs.length; i++) assert.ok(vs[i] > vs[i - 1]);
+
+      const ring = geometry.positions.length / (rings + 1);
+      const seam = rings * ring;
+      for (const name of ["positions", "normals"]) {
+        assertArrayClose(
+          assert,
+          geometry[name].subarray(seam, seam + ring),
+          geometry[name].subarray(0, ring),
+        );
+      }
+    });
+  });
+
+  describe("radii", () => {
+    it("multiply the radius per path point", () => {
+      const shape = { positions: [1, 0, 0, 0, 1, 0], cells: [[0, 1]] };
+      const geometry = sweep(
+        { positions: line(2), radii: [1, 2, 3, 4] },
+        shape,
+        { radius: [0.5, 0.25], frameOptions: { initialNormal: [0, 1, 0] } },
+      );
+      // Binormal = z × y = -x: shape x on -x, shape y on +y
+      assertArrayClose(
+        assert,
+        geometry.positions.subarray(0, 12),
+        [-0.5, 0, 0, 0, 0.5, 0, -1.5, 0, 1, 0, 1, 1],
+      );
+    });
+
+    it("drop the closing point with the path", () => {
+      const count = 16;
+      const positions = circle(count, R, true);
+      const radii = Float32Array.from({ length: (count + 1) * 2 }, () => r);
+      const geometry = sweep(
+        { positions, radii },
+        { positions: circle(8, 1, true) },
+      );
+      assert.equal(analyze(geometry).openEdges, 0);
+    });
+  });
+
+  describe("attributes", () => {
+    const shapeCount = 9;
+    const shape = {
+      positions: circle(8, 1, true),
+      ids: Uint16Array.from({ length: shapeCount }, (_, i) => i),
+      vertexColors: new Float32Array(shapeCount * 4).fill(0.5),
+    };
+    const pathCount = 4;
+    const path = {
+      positions: line(pathCount),
+      vertexColors: Float32Array.from(
+        { length: pathCount * 4 },
+        (_, i) => Math.floor(i / 4) / 10,
+      ),
+      offsets: [0, 0, 0],
+      name: "path",
+    };
+    // Binormal = z × y = -x: shape (x, y) lands on (-x, y)
+    const geometry = sweep(path, shape, {
+      radius: [0.1, 0.1],
+      frameOptions: { initialNormal: [0, 1, 0] },
+    });
+    const vertexCount = geometry.positions.length / 3;
+
+    it("copies shape attributes by shape vertex", () => {
+      assert.ok(geometry.ids instanceof Uint16Array);
+      assert.equal(geometry.ids.length, vertexCount);
+      for (let i = 0; i < vertexCount; i++) {
+        const id = geometry.ids[i];
+        assertArrayClose(
+          assert,
+          geometry.positions.subarray(i * 3, i * 3 + 2),
+          [-0.1 * shape.positions[id * 3], 0.1 * shape.positions[id * 3 + 1]],
+        );
+      }
+    });
+
+    it("copies path attributes by path vertex, over shape ones", () => {
+      assert.equal(geometry.vertexColors.length, vertexCount * 4);
+      for (let i = 0; i < vertexCount; i++) {
+        const pathIndex = Math.round(geometry.positions[i * 3 + 2] * 3);
+        assert.ok(close(geometry.vertexColors[i * 4], pathIndex / 10));
+      }
+    });
+
+    it("skips non per-vertex values", () => {
+      assert.equal(geometry.offsets, undefined);
+      assert.equal(geometry.name, undefined);
+      assert.equal(geometry.radii, undefined);
+    });
+  });
+
   it("forwards frame options", () => {
     const shape = { positions: [1, 0, 0, 1, 0.1, 0] };
     const path = { positions: line(4) };
@@ -321,12 +451,14 @@ describe("sweep", () => {
 
   it("outputs orthonormal frames", () => {
     const geometry = sweep(
-      { positions: line(16) },
-      { positions: circle(16, 1, true) },
       {
-        radius: Array.from({ length: 16 }, (_, i) => [0.1 + i * 0.02, 0.1]),
-        withFrames: true,
+        positions: line(16),
+        radii: Float32Array.from({ length: 32 }, (_, i) =>
+          i % 2 ? 0.1 : 0.1 + (i / 2) * 0.02,
+        ),
       },
+      { positions: circle(16, 1, true) },
+      { withFrames: true },
     );
     const { tangents, normals, binormals } = geometry;
     for (let i = 0; i < tangents.length; i += 3) {
