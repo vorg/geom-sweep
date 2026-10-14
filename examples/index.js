@@ -74,6 +74,8 @@ const FRAME_MODES = ["bishop", "frenet"];
 const State = {
   closed: 0,
   closedShape: 0,
+  capStart: true,
+  capEnd: true,
   withFrames: true,
   frameMode: 0,
   twist: 0,
@@ -304,6 +306,8 @@ const updateGeometry = () => {
     radius,
     closed: CLOSED[State.closed],
     closedShape: CLOSED[State.closedShape],
+    capStart: State.capStart,
+    capEnd: State.capEnd,
     withFrames: State.withFrames,
     frameOptions: {
       mode: FRAME_MODES[State.frameMode],
@@ -369,6 +373,8 @@ gui.addRadioList(
   toItems(CLOSED.map(String)),
   updateGeometry,
 );
+gui.addParam("capStart", State, "capStart", undefined, updateGeometry);
+gui.addParam("capEnd", State, "capEnd", undefined, updateGeometry);
 gui.addParam("withFrames", State, "withFrames", undefined, updateGeometry);
 gui.addRadioList(
   "frameOptions.mode",

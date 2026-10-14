@@ -177,6 +177,9 @@ describe("sweep", () => {
     }
   };
 
+  // Walls only: vertices index rings of columns
+  const noCaps = { capStart: false, capEnd: false };
+
   describe("normals", () => {
     // Smooth circle: one column per point plus the u seam
     const shape = { positions: circle(128, 1, true) };
@@ -194,7 +197,10 @@ describe("sweep", () => {
       ["curved", circle(256, 1, true), elliptical(256)],
     ]) {
       it(`are perpendicular to ${name} walls`, () => {
-        const geometry = sweep({ positions: path }, shape, { radius });
+        const geometry = sweep({ positions: path }, shape, {
+          radius,
+          ...noCaps,
+        });
         assertPerpendicularNormals(geometry, columnCount, 0.01);
       });
     }
@@ -203,8 +209,94 @@ describe("sweep", () => {
       const geometry = sweep({ positions: line(64) }, shape, {
         radius: elliptical(64),
         frameOptions: { twist: Math.PI },
+        ...noCaps,
       });
       assertPerpendicularNormals(geometry, columnCount, 0.01);
+    });
+  });
+
+  describe("caps", () => {
+    const length = 2;
+    const straight = (shape, options) =>
+      sweep({ positions: line(32, length) }, shape, { radius: r, ...options });
+    const prism = (area) => area * r * r * length;
+
+    it("closes open paths into solids", () => {
+      const geometry = straight({ positions: circle(64, 1, true) });
+      const { volume, openEdges, flippedNormals } = analyze(geometry);
+      assert.equal(openEdges, 0);
+      assert.equal(flippedNormals, 0);
+      assert.ok(close(volume, prism(polygonArea(64)), 1e-3));
+    });
+
+    it("caps holes", () => {
+      const count = 64;
+      const geometry = straight({
+        positions: Float32Array.from([...circle(count), ...circle(count, 0.5)]),
+        cells: [
+          [...range(0, count), 0],
+          [...range(count, count), count],
+        ],
+      });
+      const { volume, openEdges, flippedNormals } = analyze(geometry);
+      assert.equal(openEdges, 0);
+      assert.equal(flippedNormals, 0);
+      const area = polygonArea(count) - polygonArea(count, 0.5);
+      assert.ok(close(volume, prism(area), 1e-3));
+    });
+
+    it("caps tapered ends with x/y radii", () => {
+      // Linear x radius, constant y radius: the section area grows linearly
+      const radius = Array.from({ length: 32 }, (_, i) => [
+        0.1 + (0.2 * i) / 31,
+        0.2,
+      ]);
+      const geometry = sweep(
+        { positions: line(32, length) },
+        { positions: circle(64, 1, true) },
+        { radius },
+      );
+      const { volume, openEdges, flippedNormals } = analyze(geometry);
+      assert.equal(openEdges, 0);
+      assert.equal(flippedNormals, 0);
+      const area = polygonArea(64) * 0.2 * ((0.1 + 0.3) / 2);
+      assert.ok(close(volume, area * length, 1e-3));
+    });
+
+    it("omits caps", () => {
+      const shape = { positions: circle(64, 1, true) };
+      const walls = straight(shape, noCaps);
+      const start = straight(shape, { capEnd: false });
+      // One cap vertex per shape position, the closing one included
+      assert.equal(start.positions.length - walls.positions.length, 65 * 3);
+      assert.ok(analyze(start).openEdges > 0);
+    });
+
+    it("skips closed paths and open shapes", () => {
+      const shape = { positions: circle(64, 1, true) };
+      assert.equal(
+        torus(shape).positions.length,
+        torus(shape, noCaps).positions.length,
+      );
+      const open = { positions: circle(64) };
+      assert.equal(
+        straight(open).positions.length,
+        straight(open, noCaps).positions.length,
+      );
+    });
+
+    it("maps cap uvs from the shape or a cap mapping", () => {
+      const count = 16;
+      const uvs = Float32Array.from({ length: count * 2 }, (_, i) => i / 100);
+      const shape = { positions: circle(count, 1, true), uvs };
+      // Shape uvs need one per shape vertex: the closing point repeats one
+      shape.uvs = Float32Array.from([...uvs, uvs[0], uvs[1]]);
+      const capUvs = (geometry) =>
+        geometry.uvs.subarray(geometry.uvs.length - (count + 1) * 2);
+      assertArrayClose(assert, capUvs(straight(shape)), shape.uvs);
+
+      const mapped = capUvs(straight(shape, { capMapping: () => {} }));
+      assert.ok(mapped.every((uv) => uv === 0));
     });
   });
 
