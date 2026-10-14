@@ -90,10 +90,10 @@ const setRingTransform = (path, radius, i) => {
   TEMP_MAT4[10] = path.tangents[i * 3 + 2];
 
   vec2.set(TEMP_RADIUS_VEC2, radius);
-  if (path.radii) {
-    TEMP_RADIUS_VEC2[0] *= path.radii[i * 2];
-    TEMP_RADIUS_VEC2[1] *= path.radii[i * 2 + 1];
-  }
+  if (!path.radii) return;
+
+  TEMP_RADIUS_VEC2[0] *= path.radii[i * 2];
+  TEMP_RADIUS_VEC2[1] *= path.radii[i * 2 + 1];
 };
 
 const setPosition = (out, vertex, shapePositions, shapeIndex, path, i) => {
@@ -105,24 +105,23 @@ const setPosition = (out, vertex, shapePositions, shapeIndex, path, i) => {
   avec3.set(out.positions, vertex, TEMP_VEC3, 0);
 };
 
-const computeRingVs = (path, count, vMapping) => {
+// Distance along the path over its length: closed paths include the way back
+const computeRingDistances = (path, count) => {
   const pathCount = path.positions.length / 3;
-  const vs = new Float32Array(count);
+  const distances = new Float32Array(count);
   for (let i = 1; i < count; i++) {
-    vs[i] =
-      vs[i - 1] +
-      (vMapping === "index"
-        ? 1
-        : avec3.distance(
-            path.positions,
-            (i - 1) % pathCount,
-            path.positions,
-            i % pathCount,
-          ));
+    distances[i] =
+      distances[i - 1] +
+      avec3.distance(
+        path.positions,
+        (i - 1) % pathCount,
+        path.positions,
+        i % pathCount,
+      );
   }
-  const total = vs[count - 1] || 1;
-  for (let i = 0; i < count; i++) vs[i] /= total;
-  return vs;
+  const length = distances[count - 1] || 1;
+  for (let i = 0; i < count; i++) distances[i] /= length;
+  return distances;
 };
 
 function sweep(geometry, shape, options, out = {}) {
@@ -134,7 +133,6 @@ function sweep(geometry, shape, options, out = {}) {
     capEnd = true,
     capMapping,
     creaseAngle,
-    vMapping = "length",
     frameOptions,
     withFrames = false,
   } = {
@@ -203,7 +201,7 @@ function sweep(geometry, shape, options, out = {}) {
     shape,
     shapeCount,
     GENERATED_ATTRIBUTES,
-  ).filter(({ name }) => !pathAttributes.some((path) => path.name === name));
+  ).filter(({ name }) => pathAttributes.every((path) => path.name !== name));
   for (const { name, source, size: attributeSize } of [
     ...pathAttributes,
     ...shapeAttributes,
@@ -224,7 +222,7 @@ function sweep(geometry, shape, options, out = {}) {
     wallCellCount + profile.cells.length * caps.length,
   );
 
-  const vs = computeRingVs(path, wallRingCount, vMapping);
+  const vs = computeRingDistances(path, wallRingCount);
 
   for (let ring = 0; ring < wallRingCount; ring++) {
     const i = ring % ringCount;

@@ -98,14 +98,11 @@ const CLOSED = ["auto", true, false];
 
 const FRAME_MODES = ["bishop", "frenet"];
 
-const V_MAPPINGS = ["length", "index"];
-
 const State = {
   closed: 0,
   closedShape: 0,
   capStart: true,
   capEnd: true,
-  vMapping: 0,
   withFrames: true,
   frameMode: 0,
   twist: 0,
@@ -337,7 +334,6 @@ const updateGeometry = () => {
     closedShape: CLOSED[State.closedShape],
     capStart: State.capStart,
     capEnd: State.capEnd,
-    vMapping: V_MAPPINGS[State.vMapping],
     withFrames: State.withFrames,
     frameOptions: {
       mode: FRAME_MODES[State.frameMode],
@@ -405,13 +401,6 @@ gui.addRadioList(
 );
 gui.addParam("capStart", State, "capStart", undefined, updateGeometry);
 gui.addParam("capEnd", State, "capEnd", undefined, updateGeometry);
-gui.addRadioList(
-  "vMapping",
-  State,
-  "vMapping",
-  toItems(V_MAPPINGS),
-  updateGeometry,
-);
 gui.addParam("withFrames", State, "withFrames", undefined, updateGeometry);
 gui.addRadioList(
   "frameOptions.mode",

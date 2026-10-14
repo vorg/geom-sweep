@@ -59,7 +59,6 @@ All attributes are flat arrays (`TypedArray | Array`): `[x, y, z, x, y, z, ...]`
 - options.capEnd: `boolean` (default: `true`) - add a cap at the end of open paths, for closed shapes.
 - options.capMapping: `Function` (default: shape `uvs` or `mappings.circumferential`) - overrides the cap uvs with a [primitive-geometry](https://github.com/dmnsgn/primitive-geometry) mapping.
 - options.creaseAngle: `number` (default: `Math.PI / 6`) - shape turns sharper than this angle (in radians) keep hard wall edges.
-- options.vMapping: `"length" | "index"` (default: `"length"`) - v from the distance along the path or from the path position index.
 - options.frameOptions: `Object` (default: `{}`) - [frenet-serret-frames](https://github.com/dmnsgn/frenet-serret-frames) options (`mode`, `initialNormal`, `finalNormal`, `twist`) used when the path has no frames. `closed` follows `options.closed`.
 - options.withFrames: `boolean` (default: `false`) - compute tangents and binormals.
 
@@ -67,7 +66,7 @@ All attributes are flat arrays (`TypedArray | Array`): `[x, y, z, x, y, z, ...]`
 
 **Returns**
 
-geometry: `{ positions: TypedArray, normals: TypedArray, uvs: TypedArray, cells: TypedArray, tangents?: TypedArray, binormals?: TypedArray }` - the swept geometry with optional tangents and binormals, and copied attributes. Closed paths end on a copy of their first ring for the v seam.
+geometry: `{ positions: TypedArray, normals: TypedArray, uvs: TypedArray, cells: TypedArray, tangents?: TypedArray, binormals?: TypedArray }` - the swept geometry with optional tangents and binormals, and copied attributes. Uvs wrap u once around each shape loop and v along the path length. Closed paths end on a copy of their first ring for the v seam.
 
 ## License
 

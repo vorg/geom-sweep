@@ -385,11 +385,6 @@ describe("sweep", () => {
       assertArrayClose(assert, ringVs(geometry, 3), [0, 0.1, 1]);
     });
 
-    it("maps v by ring index", () => {
-      const geometry = sweep(path, shape, { vMapping: "index", ...noCaps });
-      assertArrayClose(assert, ringVs(geometry, 3), [0, 0.5, 1]);
-    });
-
     it("ends closed paths on a v = 1 copy of the first ring", () => {
       const rings = 32;
       const geometry = sweep(
