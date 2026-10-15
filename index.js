@@ -1,4 +1,4 @@
-import { avec2, avec3, vec2, vec3, mat4 } from "pex-math";
+import { avec2, avec3, avec4, vec3, mat4 } from "pex-math";
 import {
   computeCapUvs,
   computeColumns,
@@ -10,8 +10,8 @@ import {
 import computeFrenetSerretFrames from "frenet-serret-frames";
 import typedArrayConstructor from "typed-array-constructor";
 
-const TEMP_MAT4 = mat4.create();
-const TEMP_RADIUS_VEC2 = vec2.create();
+const TEMP_POSITION_MAT4 = mat4.create();
+const TEMP_NORMAL_MAT4 = mat4.create();
 const TEMP_VEC3 = vec3.create();
 
 const PATH_ATTRIBUTE_SIZES = {
@@ -45,33 +45,37 @@ const computeRingDistances = (path, ringCount, count) => {
   return distances;
 };
 
+const mat4SetColumn = (m, column, vectors, i, w) =>
+  avec4.set4(
+    m,
+    column,
+    vectors[i * 3],
+    vectors[i * 3 + 1],
+    vectors[i * 3 + 2],
+    w,
+  );
+
 const setRingTransform = (path, radius, i) => {
-  TEMP_MAT4[0] = path.binormals[i * 3];
-  TEMP_MAT4[1] = path.binormals[i * 3 + 1];
-  TEMP_MAT4[2] = path.binormals[i * 3 + 2];
+  // Normal matrix translation stays the identity one
+  mat4SetColumn(TEMP_NORMAL_MAT4, 0, path.binormals, i, 0);
+  mat4SetColumn(TEMP_NORMAL_MAT4, 1, path.normals, i, 0);
+  mat4SetColumn(TEMP_NORMAL_MAT4, 2, path.tangents, i, 0);
+  mat4.set(TEMP_POSITION_MAT4, TEMP_NORMAL_MAT4);
+  mat4SetColumn(TEMP_POSITION_MAT4, 3, path.positions, i, 1);
 
-  TEMP_MAT4[4] = path.normals[i * 3];
-  TEMP_MAT4[5] = path.normals[i * 3 + 1];
-  TEMP_MAT4[6] = path.normals[i * 3 + 2];
-
-  TEMP_MAT4[8] = path.tangents[i * 3];
-  TEMP_MAT4[9] = path.tangents[i * 3 + 1];
-  TEMP_MAT4[10] = path.tangents[i * 3 + 2];
-
-  vec2.set(TEMP_RADIUS_VEC2, radius);
-  if (!path.radii) return;
-
-  TEMP_RADIUS_VEC2[0] *= path.radii[i * 2];
-  TEMP_RADIUS_VEC2[1] *= path.radii[i * 2 + 1];
+  const rx = radius[0] * (path.radii?.[i * 2] ?? 1);
+  const ry = radius[1] * (path.radii?.[i * 2 + 1] ?? 1);
+  avec4.scale(TEMP_POSITION_MAT4, 0, rx);
+  avec4.scale(TEMP_POSITION_MAT4, 1, ry);
+  // Normals: scaled by the other radius rather than divided by their own,
+  // perpendicular to walls stretched by x/y radii, even a zero one
+  avec4.scale(TEMP_NORMAL_MAT4, 0, ry);
+  avec4.scale(TEMP_NORMAL_MAT4, 1, rx);
 };
 
-const setPosition = (out, vertex, shapePositions, shapeIndex, path, i) => {
-  avec3.set(TEMP_VEC3, 0, shapePositions, shapeIndex);
-  TEMP_VEC3[0] *= TEMP_RADIUS_VEC2[0];
-  TEMP_VEC3[1] *= TEMP_RADIUS_VEC2[1];
-  vec3.multMat4(TEMP_VEC3, TEMP_MAT4);
-  avec3.add(TEMP_VEC3, 0, path.positions, i);
-  avec3.set(out.positions, vertex, TEMP_VEC3, 0);
+const setPosition = (out, vertex, shapePositions, shapeIndex) => {
+  avec3.set(out.positions, vertex, shapePositions, shapeIndex);
+  avec3.multMat4(out.positions, vertex, TEMP_POSITION_MAT4, 0);
 };
 
 const copyPathAttributes = (
@@ -173,22 +177,9 @@ const writeWalls = (context, polyline, vertexOffset) => {
     for (let j = 0; j < columnCount; j++) {
       const vertex = ringOffset + j;
 
-      setPosition(
-        out,
-        vertex,
-        shapePositions,
-        columns.shapeIndices[j],
-        path,
-        i,
-      );
-
-      // Normals: scaled by the other radius rather than divided by their own,
-      // perpendicular to walls stretched by x/y radii, even a zero one
-      avec3.set(TEMP_VEC3, 0, columns.normals, j);
-      TEMP_VEC3[0] *= TEMP_RADIUS_VEC2[1];
-      TEMP_VEC3[1] *= TEMP_RADIUS_VEC2[0];
-      vec3.multMat4(TEMP_VEC3, TEMP_MAT4);
-      avec3.set(out.normals, vertex, TEMP_VEC3, 0);
+      setPosition(out, vertex, shapePositions, columns.shapeIndices[j]);
+      avec3.set(out.normals, vertex, columns.normals, j);
+      avec3.multMat4(out.normals, vertex, TEMP_NORMAL_MAT4, 0);
 
       avec2.set2(out.uvs, vertex, columns.u[j], vs[ring]);
     }
@@ -265,7 +256,7 @@ const writeCap = (
 
   for (let k = 0; k < shapeCount; k++) {
     const vertex = vertexOffset + k;
-    setPosition(out, vertex, shapePositions, k, path, ring);
+    setPosition(out, vertex, shapePositions, k);
     // Given path frames may not be unit length
     avec3.set(out.normals, vertex, path.tangents, ring);
     avec3.normalize(out.normals, vertex);

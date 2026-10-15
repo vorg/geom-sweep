@@ -222,6 +222,7 @@ const lineShader = /* wgsl */ `
 struct Uniforms {
   projection: mat4x4f,
   view: mat4x4f,
+  depthOffset: f32,
 }
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
@@ -235,6 +236,7 @@ fn vertexMain(@location(0) position: vec3f, @location(1) color: vec3f) -> Vertex
   var output: VertexOut;
   output.color = color;
   output.position = uniforms.projection * uniforms.view * vec4f(position, 1.0);
+  output.position.z -= uniforms.depthOffset * output.position.w;
   return output;
 }
 
@@ -248,12 +250,15 @@ const wireframeShader = /* wgsl */ `
 struct Uniforms {
   projection: mat4x4f,
   view: mat4x4f,
+  depthOffset: f32,
 }
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
 @vertex
 fn vertexMain(@location(0) position: vec3f) -> @builtin(position) vec4f {
-  return uniforms.projection * uniforms.view * vec4f(position, 1.0);
+  var clipPosition = uniforms.projection * uniforms.view * vec4f(position, 1.0);
+  clipPosition.z -= uniforms.depthOffset * clipPosition.w;
+  return clipPosition;
 }
 
 @fragment
@@ -283,16 +288,15 @@ const linePipeline = {
   topology: "line-list",
   depthWriteEnabled: true,
 };
-const lineUniforms = { projection, view: camera.viewMatrix };
 const drawWireframe = gpu.defineCommand({
   label: "drawWireframe",
   pipeline: { ...linePipeline, shader: wireframeShader },
-  uniforms: lineUniforms,
+  uniforms: { projection, view: camera.viewMatrix, depthOffset: 0 },
 });
 const drawFrames = gpu.defineCommand({
   label: "drawFrames",
   pipeline: linePipeline,
-  uniforms: lineUniforms,
+  uniforms: { projection, view: camera.viewMatrix, depthOffset: 0.00001 },
 });
 
 const FRAME_COLORS = {
@@ -422,6 +426,7 @@ const updateGeometry = () => {
                 positions: new Float32Array(
                   (loop && isClosed ? smoothPoints : path).flat(),
                 ),
+                cells: [],
               },
               { ...frameOptions, closed: isClosed },
             );
