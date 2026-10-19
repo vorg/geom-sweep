@@ -1,6 +1,6 @@
 {
   "name": "geom-sweep",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Extrudes a shape along a path",
   "keywords": [
     "geom",
@@ -16,7 +16,10 @@
   ],
   "homepage": "https://github.com/vorg/geom-sweep",
   "bugs": "https://github.com/vorg/geom-sweep/issues",
-  "repository": "vorg/geom-sweep",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vorg/geom-sweep.git"
+  },
   "license": "MIT",
   "author": "Marcin Ignac <marcin.ignac@gmail.com> (https://github.com/vorg)",
   "contributors": [
