@@ -1,365 +1,525 @@
 import sweep from "../index.js";
 
-import createContext from "pex-context";
-import { avec3, avec4, mat4 } from "pex-math";
+import * as gpu from "pex-gpu";
+import { avec3, mat4 } from "pex-math";
 import createGUI from "pex-gui";
 import { perspective as createCamera, orbiter as createOrbiter } from "pex-cam";
+import computeFrenetSerretFrames from "frenet-serret-frames";
+import {
+  annulus,
+  annulusPath,
+  circlePath,
+  crossPath,
+  disc,
+  ellipsePath,
+  squarePath,
+  starPath,
+} from "primitive-geometry";
+import edges from "geom-edges";
+import merge from "geom-merge";
 import splinePoints from "spline-points";
 
+const toItems = (names) => names.map((name, value) => ({ name, value }));
+
+// All in the XY plane, swept along the path tangent
+const SHAPES = {
+  circle: () => circlePath({ closed: true }),
+  square: () => squarePath({ closed: true }),
+  star: () => starPath({ closed: true }),
+  cross: () => crossPath({ closed: true }),
+  "annulus (hole)": () => annulusPath({ closed: true }),
+  "nested annulus": () =>
+    merge([
+      annulusPath({ closed: true }),
+      annulusPath({ closed: true, radius: 0.15, innerRadius: 0.075 }),
+    ]),
+  "nested annulus (triangles)": () =>
+    merge([annulus(), annulus({ radius: 0.15, innerRadius: 0.075 })]),
+  "disc (triangles)": () => disc(),
+  "star (open)": () => starPath(),
+  "arc (open)": () => circlePath({ theta: Math.PI }),
+};
+
+// 2D path positions placed in 3D
+const toPoints = ({ positions }, toPoint) =>
+  Array.from({ length: positions.length / 3 }, (_, i) =>
+    toPoint(positions[i * 3], positions[i * 3 + 1]),
+  );
+
+// Default taper: x radius oscillating from 0 to 1 along a polyline, y radius
+// constant
+const taper = (u) => [0.5 + 0.5 * Math.sin(u * Math.PI * 4), 1];
+
+// Polylines swept separately, each one a path cell, with an optional taper
+// along it
+const PATHS = {
+  circle: () => [
+    {
+      loop: true,
+      points: toPoints(circlePath({ radius: 1, segments: 50 }), (x, y) => [
+        x,
+        y,
+        0,
+      ]),
+    },
+  ],
+  knot: () => [
+    {
+      loop: true,
+      points: Array.from({ length: 64 }, (_, i) => {
+        const t = (Math.PI * 2 * i) / 64;
+        return [
+          (10 * (Math.cos(t) + Math.cos(3 * t)) +
+            Math.cos(2 * t) +
+            Math.cos(4 * t)) /
+            10,
+          (6 * Math.sin(t) + 10 * Math.sin(3 * t)) / 10,
+          (4 * Math.sin(3 * t) * Math.sin((5 * t) / 2) +
+            4 * Math.sin(4 * t) -
+            2 * Math.sin(6 * t)) /
+            10,
+        ];
+      }),
+    },
+  ],
+  helix: () => [
+    {
+      loop: false,
+      points: Array.from({ length: 48 }, (_, i) => {
+        const t = (Math.PI * 6 * i) / 47;
+        return [Math.cos(t), (i / 47) * 2 - 1, Math.sin(t)];
+      }),
+    },
+  ],
+  // Links interlocked in alternate planes, tapered flat in their plane at
+  // both ends to fit through each other. Outer links are halved into open arcs
+  // through their neighbour. Default frames put the binormal (x radius) out of
+  // the XY plane but in the XZ plane.
+  chain: () => {
+    const count = 5;
+    // [thetaOffset, theta]
+    const arcs = {
+      0: [-Math.PI / 2, Math.PI],
+      [count - 1]: [Math.PI / 2, Math.PI],
+    };
+    return Array.from({ length: count }, (_, i) => {
+      const [thetaOffset, theta] = arcs[i] ?? [0, Math.PI * 2];
+      const flat = (u) => 1 - 0.6 * Math.cos(thetaOffset + u * theta) ** 4;
+      const x = (i - (count - 1) / 2) * 0.75;
+      return {
+        loop: !arcs[i],
+        points: toPoints(
+          ellipsePath({
+            sy: 0.6,
+            segments: arcs[i] ? 12 : 24,
+            theta,
+            thetaOffset,
+          }),
+          (a, b) => (i % 2 ? [x + a, 0, b] : [x + a, b, 0]),
+        ),
+        radius: i % 2 ? (u) => [flat(u), 1] : (u) => [1, flat(u)],
+      };
+    });
+  },
+};
+
+const CLOSED = ["auto", true, false];
+
+const FRAME_MODES = ["bishop", "frenet"];
+
 const State = {
-  closed: false,
-  closedShape: true,
-  caps: false,
+  closed: 0,
+  closedShape: 0,
+  capStart: true,
+  capEnd: true,
   withFrames: true,
-  radius: 0.1,
+  frameMode: 0,
+  twist: 0,
+  // primitive-geometry shapes fit a unit square
+  radius: 0.2,
 
   taper: false,
   smoothPath: true,
-  typedArray: true,
-  shape: 0,
-  shapes: ["square", "star"],
-  path: 1,
-  paths: ["circle", "knot"],
+  shape: 2,
+  shapes: Object.keys(SHAPES),
+  path: 2,
+  paths: Object.keys(PATHS),
 
   frame: 0,
   frames: ["none", "path", "swept"],
-  mode: 2,
-  shadings: ["normals", "simple lighting", "standard derivative", "uvs"],
+  mode: 0,
+  shadings: ["simple lighting", "normals", "standard derivative", "uvs"],
+  wireframe: false,
 };
 
-const ctx = createContext({
-  type: "webgl",
-  element: document.querySelector("main"),
-  pixelRatio: devicePixelRatio,
-});
+const ctx = await gpu.createContext();
+
 const camera = createCamera({
   fov: Math.PI / 3,
-  aspect: ctx.gl.drawingBufferWidth / ctx.gl.drawingBufferHeight,
+  aspect: ctx.width / ctx.height,
   near: 0.1,
   far: 100,
   position: [0, 0, 4],
 });
-const orbiter = createOrbiter({ camera });
+createOrbiter({ camera, element: ctx.canvas });
 
-let cmdOptions = {};
-let cmdLineOptions = {};
+const projection = mat4.create();
 
-const segmentLength = 1 / 10;
+const shader = /* wgsl */ `
+struct Uniforms {
+  projection: mat4x4f,
+  view: mat4x4f,
+  mode: f32,
+}
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+struct VertexIn {
+  @location(0) position: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) uv: vec2f,
+}
+struct VertexOut {
+  @builtin(position) position: vec4f,
+  @location(0) worldPosition: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) uv: vec2f,
+}
+
+@vertex
+fn vertexMain(input: VertexIn) -> VertexOut {
+  var output: VertexOut;
+  output.worldPosition = input.position;
+  output.normal = input.normal;
+  output.uv = input.uv;
+  output.position = uniforms.projection * uniforms.view * vec4f(input.position, 1.0);
+  return output;
+}
+
+@fragment
+fn fragmentMain(input: VertexOut, @builtin(front_facing) frontFacing: bool) -> @location(0) vec4f {
+  let normal = normalize(input.normal);
+  var color = normal * 0.5 + 0.5;
+  if (uniforms.mode == 0.0) {
+    let lambert = max((dot(normal, normalize(vec3f(1.0, -1.0, 1.0))) + 0.1) / 1.1, 0.0);
+    color = pow(vec3f(0.1) + lambert * pow(color, vec3f(2.2)), vec3f(1.0 / 2.2));
+  } else if (uniforms.mode == 2.0) {
+    // Face normal from the triangle winding: disagrees with flipped normals.
+    // WebGPU framebuffer y points down, reversing dpdy compared to WebGL.
+    let faceNormal = normalize(cross(dpdy(input.worldPosition), dpdx(input.worldPosition)));
+    color = faceNormal * 0.5 + 0.5;
+  } else if (uniforms.mode == 3.0) {
+    color = vec3f(input.uv, 0.0);
+  }
+  // Back faces show through open shapes and inside-out solids
+  if (!frontFacing) {
+    color = mix(color, vec3f(1.0, 0.0, 0.0), 0.6);
+  }
+  return vec4f(color, 1.0);
+}
+`;
+
+const lineShader = /* wgsl */ `
+struct Uniforms {
+  projection: mat4x4f,
+  view: mat4x4f,
+  depthOffset: f32,
+}
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+struct VertexOut {
+  @builtin(position) position: vec4f,
+  @location(0) color: vec3f,
+}
+
+@vertex
+fn vertexMain(@location(0) position: vec3f, @location(1) color: vec3f) -> VertexOut {
+  var output: VertexOut;
+  output.color = color;
+  output.position = uniforms.projection * uniforms.view * vec4f(position, 1.0);
+  output.position.z -= uniforms.depthOffset * output.position.w;
+  return output;
+}
+
+@fragment
+fn fragmentMain(input: VertexOut) -> @location(0) vec4f {
+  return vec4f(input.color, 1.0);
+}
+`;
+
+const wireframeShader = /* wgsl */ `
+struct Uniforms {
+  projection: mat4x4f,
+  view: mat4x4f,
+  depthOffset: f32,
+}
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+@vertex
+fn vertexMain(@location(0) position: vec3f) -> @builtin(position) vec4f {
+  var clipPosition = uniforms.projection * uniforms.view * vec4f(position, 1.0);
+  clipPosition.z -= uniforms.depthOffset * clipPosition.w;
+  return clipPosition;
+}
+
+@fragment
+fn fragmentMain() -> @location(0) vec4f {
+  return vec4f(1.0);
+}
+`;
+
+const pass = { clearValue: [0.2, 0.2, 0.2, 1], depthClearValue: 1 };
+
+const drawMesh = gpu.defineCommand({
+  label: "drawMesh",
+  pipeline: {
+    shader,
+    depthWriteEnabled: true,
+    cullMode: "none",
+    // Pushed back so the lines win the depth test: WebGPU only biases
+    // triangles
+    depthBias: 1,
+    depthBiasSlopeScale: 1,
+  },
+  uniforms: { projection, view: camera.viewMatrix, mode: State.mode },
+});
+
+const linePipeline = {
+  shader: lineShader,
+  topology: "line-list",
+  depthWriteEnabled: true,
+};
+const drawWireframe = gpu.defineCommand({
+  label: "drawWireframe",
+  pipeline: { ...linePipeline, shader: wireframeShader },
+  uniforms: { projection, view: camera.viewMatrix, depthOffset: 0 },
+});
+const drawFrames = gpu.defineCommand({
+  label: "drawFrames",
+  pipeline: linePipeline,
+  uniforms: { projection, view: camera.viewMatrix, depthOffset: 0.00001 },
+});
+
+const FRAME_COLORS = {
+  tangents: [1, 0, 0],
+  normals: [0, 1, 0],
+  binormals: [0, 0, 1],
+};
+
+const getFrameLines = ({ positions, ...frames }, scale) => {
+  const count = positions.length / 3;
+  const lines = new Float32Array(count * 6 * 3);
+  const colors = new Float32Array(count * 6 * 3);
+  let vertex = 0;
+  for (const [name, color] of Object.entries(FRAME_COLORS)) {
+    if (!frames[name]) continue;
+    for (let i = 0; i < count; i++) {
+      avec3.set(lines, vertex, positions, i);
+      avec3.set(lines, vertex + 1, positions, i);
+      avec3.addScaled(lines, vertex + 1, frames[name], i, scale);
+      avec3.set(colors, vertex, color, 0);
+      avec3.set(colors, vertex + 1, color, 0);
+      vertex += 2;
+    }
+  }
+  return {
+    position: lines.subarray(0, vertex * 3),
+    color: colors.subarray(0, vertex * 3),
+  };
+};
+
+const createVertexBuffers = (data) =>
+  Object.fromEntries(
+    Object.entries(data).map(([name, array]) => [
+      name,
+      gpu.createBuffer(ctx, { usage: "vertex", data: array }),
+    ]),
+  );
+
+const disposeBuffers = (cmd) => {
+  for (const buffer of [...Object.values(cmd.attributes ?? {}), cmd.indices]) {
+    buffer?.[Symbol.dispose]();
+  }
+  cmd.attributes = undefined;
+  cmd.indices = undefined;
+};
 
 const updateGeometry = () => {
-  // Shape
-  let shape = [];
+  const polylines = PATHS[State.paths[State.path]]().map(
+    ({ loop, points, radius }) => {
+      const smoothPoints = State.smoothPath
+        ? splinePoints(points, { segmentLength: 0.1, closed: loop })
+        : points;
+      // Closed by repeating the first point, as "auto" expects
+      return {
+        loop,
+        smoothPoints,
+        path: loop ? [...smoothPoints, smoothPoints[0]] : smoothPoints,
+        radius: State.taper ? (radius ?? taper) : undefined,
+      };
+    },
+  );
 
-  if (State.shapes[State.shape] === "square") {
-    shape = [
-      [1, 1, 0],
-      [-1, 1, 0],
-      [-1, -1, 0],
-      [1, -1, 0],
-    ];
-  } else if (State.shapes[State.shape] === "star") {
-    const starBranchCount = 5;
-    for (let i = 0; i < starBranchCount * 2; i++) {
-      const r = (2 * ((i % 2) + 1)) / 2;
-      const t = (Math.PI * 2 * i) / (starBranchCount * 2);
-
-      shape.push([r * Math.sin(t), r * Math.cos(t), 0]);
-    }
-  }
-
-  // Path
-  let path = [];
-
-  if (State.paths[State.path] === "circle") {
-    for (let i = 0; i < 50; i++) {
-      path.push([
-        Math.cos((i / 50) * 2 * Math.PI),
-        Math.sin((i / 50) * 2 * Math.PI),
-        0,
-      ]);
-      // path.push([
-      //   0.3 * Math.sin((i / 10) * 4 * Math.PI),
-      //   2 * (i / 10 - 0.5),
-      //   0.3 * Math.cos((i / 10) * 4 * Math.PI),
-      // ]);
-    }
-  } else if (State.paths[State.path] === "knot") {
-    const n = 64;
-    for (var i = 0; i < n; i++) {
-      const t = (Math.PI * 2 * i) / n;
-      const x =
-        10 * (Math.cos(t) + Math.cos(3 * t)) +
-        Math.cos(2 * t) +
-        Math.cos(4 * t);
-      const y = 6 * Math.sin(t) + 10 * Math.sin(3 * t);
-      const z =
-        4 * Math.sin(3 * t) * Math.sin((5 * t) / 2) +
-        4 * Math.sin(4 * t) -
-        2 * Math.sin(6 * t);
-      path.push([x * segmentLength, y * segmentLength, z * segmentLength]);
-    }
-  }
-
-  const smoothPath = State.smoothPath
-    ? splinePoints(path, { segmentLength, closed: true })
-    : path;
-  const radius = State.taper
-    ? smoothPath.map((p, i, points) => [
-        State.radius / 2 +
-          (State.radius / 2) * Math.sin((i / points.length) * Math.PI * 4),
-        State.radius,
-      ])
-    : State.radius;
-
-  const geometry = {
-    positions: State.typedArray
-      ? new Float32Array(smoothPath.flat())
-      : smoothPath,
+  const geometry = merge(
+    polylines.map(({ path, radius }) => ({
+      positions: new Float32Array(path.flat()),
+      cells: [path.map((_, i) => i)],
+      ...(radius && {
+        radii: Float32Array.from(
+          path.flatMap((_, i) => radius(i / (path.length - 1))),
+        ),
+      }),
+    })),
+  );
+  const closed = CLOSED[State.closed];
+  const frameOptions = {
+    mode: FRAME_MODES[State.frameMode],
+    twist: State.twist,
+    initialNormal: State.paths[State.path] === "circle" ? [0, 0, 1] : null,
   };
+
   console.time("Sweeping time");
-  const sweptGeometry = sweep(geometry, shape, {
-    ...State,
-    radius,
-    initialNormal: State.paths[State.path] === "circle" && [0, 0, 1],
+  const sweptGeometry = sweep(geometry, SHAPES[State.shapes[State.shape]](), {
+    radius: [State.radius, State.radius],
+    closed,
+    closedShape: CLOSED[State.closedShape],
+    capStart: State.capStart,
+    capEnd: State.capEnd,
+    withFrames: State.withFrames,
+    frameOptions,
   });
   console.timeEnd("Sweeping time");
   console.log(sweptGeometry);
 
-  cmdOptions = {
-    attributes: {
-      aPosition: ctx.vertexBuffer(sweptGeometry.positions),
-      aNormal: ctx.vertexBuffer(sweptGeometry.normals),
-      aUv: ctx.vertexBuffer(sweptGeometry.uvs),
-    },
-    indices: ctx.indexBuffer(sweptGeometry.cells),
-  };
+  // Wireframe shares the mesh position buffer
+  disposeBuffers(drawMesh);
+  drawWireframe.indices?.[Symbol.dispose]();
+  disposeBuffers(drawFrames);
 
-  // Frame lines
-  if (State.frames[State.frame] !== "none") {
-    const g = State.frames[State.frame] === "swept" ? sweptGeometry : geometry;
-    const size = g.positions.length / 3;
-    const tnbBuffer = new Float32Array(size * 3 * 6);
-    const colorBuffer = new Float32Array(size * 4 * 6);
-    const frameScale = State.radius * 2;
-    for (let i = 0; i < size; i++) {
-      avec3.set(tnbBuffer, i * 6 + 2, g.positions, i);
-      avec3.set(tnbBuffer, i * 6 + 3, g.positions, i);
-      avec3.addScaled(tnbBuffer, i * 6 + 3, g.normals, i, frameScale);
+  drawMesh.attributes = createVertexBuffers({
+    position: sweptGeometry.positions,
+    normal: sweptGeometry.normals,
+    uv: sweptGeometry.uvs,
+  });
+  drawMesh.indices = gpu.createBuffer(ctx, {
+    usage: "index",
+    data: sweptGeometry.cells,
+  });
 
-      if (g.tangents) {
-        avec3.set(tnbBuffer, i * 6, g.positions, i);
-        avec3.set(tnbBuffer, i * 6 + 1, g.positions, i);
-        avec3.addScaled(tnbBuffer, i * 6 + 1, g.tangents, i, frameScale);
-      }
-      if (g.binormals) {
-        avec3.set(tnbBuffer, i * 6 + 4, g.positions, i);
-        avec3.set(tnbBuffer, i * 6 + 5, g.positions, i);
-        avec3.addScaled(tnbBuffer, i * 6 + 5, g.binormals, i, frameScale);
-      }
+  drawWireframe.attributes = { position: drawMesh.attributes.position };
+  drawWireframe.indices = gpu.createBuffer(ctx, {
+    usage: "index",
+    data: Uint32Array.from(edges(sweptGeometry.cells).flat()),
+  });
 
-      avec4.set(colorBuffer, i * 6 + 0, [1, 0, 0, 1], 0);
-      avec4.set(colorBuffer, i * 6 + 1, [0.5, 0, 0, 1], 0);
-      avec4.set(colorBuffer, i * 6 + 2, [0, 1, 0, 1], 0);
-      avec4.set(colorBuffer, i * 6 + 3, [0, 0.5, 0, 1], 0);
-      avec4.set(colorBuffer, i * 6 + 4, [0, 0, 1, 1], 0);
-      avec4.set(colorBuffer, i * 6 + 5, [0, 0, 0.5, 1], 0);
-    }
-    cmdLineOptions = {
-      attributes: {
-        aPosition: ctx.vertexBuffer(tnbBuffer),
-        aColor: ctx.vertexBuffer(colorBuffer),
-      },
-      count: size * 6,
-    };
-  }
+  if (State.frames[State.frame] === "none") return;
+
+  // sweep doesn't write frames to the path: compute them for display, from
+  // the same points and options, the repeated first point dropped if closed
+  const frames =
+    State.frames[State.frame] === "swept"
+      ? sweptGeometry
+      : merge(
+          polylines.map(({ loop, smoothPoints, path }) => {
+            const isClosed = closed === "auto" ? loop : closed;
+            return computeFrenetSerretFrames(
+              {
+                positions: new Float32Array(
+                  (loop && isClosed ? smoothPoints : path).flat(),
+                ),
+                cells: [],
+              },
+              { ...frameOptions, closed: isClosed },
+            );
+          }),
+        );
+  drawFrames.attributes = createVertexBuffers(
+    // As long as the swept shape radius
+    getFrameLines(frames, State.radius * 0.5),
+  );
 };
 
 updateGeometry();
 
 const gui = createGUI(ctx);
 gui.addColumn("Sweep Options");
-gui.addParam("closed", State, "closed", undefined, updateGeometry);
-gui.addParam("closedShape", State, "closedShape", undefined, updateGeometry);
-gui.addParam("caps", State, "caps", undefined, updateGeometry);
+gui.addRadioList(
+  "closed",
+  State,
+  "closed",
+  toItems(CLOSED.map(String)),
+  updateGeometry,
+);
+gui.addRadioList(
+  "closedShape",
+  State,
+  "closedShape",
+  toItems(CLOSED.map(String)),
+  updateGeometry,
+);
+gui.addParam("capStart", State, "capStart", undefined, updateGeometry);
+gui.addParam("capEnd", State, "capEnd", undefined, updateGeometry);
 gui.addParam("withFrames", State, "withFrames", undefined, updateGeometry);
-gui.addParam("radius", State, "radius", { min: 0, max: 0.5 }, updateGeometry);
+gui.addRadioList(
+  "frameOptions.mode",
+  State,
+  "frameMode",
+  toItems(FRAME_MODES),
+  updateGeometry,
+);
+gui.addParam(
+  "frameOptions.twist",
+  State,
+  "twist",
+  { min: -Math.PI * 2, max: Math.PI * 2 },
+  updateGeometry,
+);
+gui.addParam("radius", State, "radius", { min: 0, max: 1 }, updateGeometry);
 
 gui.addColumn("Example Options");
 gui.addRadioList(
   "Shape",
   State,
   "shape",
-  State.shapes.map((name, value) => ({ name, value })),
-  updateGeometry
+  toItems(State.shapes),
+  updateGeometry,
 );
-gui.addRadioList(
-  "Path",
-  State,
-  "path",
-  State.paths.map((name, value) => ({ name, value })),
-  updateGeometry
-);
+gui.addRadioList("Path", State, "path", toItems(State.paths), updateGeometry);
 gui.addParam("taper", State, "taper", undefined, updateGeometry);
 gui.addParam("smoothPath", State, "smoothPath", undefined, updateGeometry);
-gui.addParam("typedArray", State, "typedArray", undefined, updateGeometry);
 
 gui.addColumn("Rendering");
 gui.addRadioList(
   "Frames",
   State,
   "frame",
-  State.frames.map((name, value) => ({ name, value })),
-  updateGeometry
+  toItems(State.frames),
+  updateGeometry,
 );
-gui.addRadioList(
-  "Mode",
-  State,
-  "mode",
-  State.shadings.map((name, value) => ({ name, value }))
-);
+gui.addRadioList("Mode", State, "mode", toItems(State.shadings));
+gui.addParam("wireframe", State, "wireframe");
 
-const modelMatrix = mat4.create();
-
-const drawMesh = {
-  pipeline: ctx.pipeline({
-    depthTest: true,
-    // cullFace: true,
-    vert: /* glsl */ `
-attribute vec3 aPosition;
-attribute vec3 aNormal;
-attribute vec2 aUv;
-
-uniform mat4 uProjectionMatrix;
-uniform mat4 uViewMatrix;
-uniform mat4 uModelMatrix;
-uniform mat4 uInvViewMatrix;
-
-varying vec3 vPositionWorld;
-varying vec3 vNormal;
-varying vec2 vUv;
-varying vec4 vColor;
-
-void main () {
-  mat4 modelViewMatrix = uViewMatrix * uModelMatrix;
-  vPositionWorld = (uModelMatrix * vec4(aPosition, 1.0)).xyz;
-  vNormal = aNormal;
-  vColor = vec4(aNormal * 0.5 + 0.5, 1.0);
-  vUv = aUv;
-  gl_Position = uProjectionMatrix * modelViewMatrix * vec4(aPosition, 1.0);
-}`,
-    frag: /* glsl */ `#extension GL_OES_standard_derivatives : enable
-precision highp float;
-
-uniform float uMode;
-
-varying vec3 vPositionWorld;
-varying vec3 vNormal;
-varying vec2 vUv;
-varying vec4 vColor;
-
-const float gamma = 2.2;
-vec3 toLinear(vec3 v) {
-  return pow(v, vec3(gamma));
-}
-vec3 toGamma(vec3 v) {
-  return pow(v, vec3(1.0 / gamma));
-}
-
-void main () {
-  if (uMode == 0.0) gl_FragColor = vColor;
-
-  if (uMode == 1.0) {
-    vec3 ambientColor = vec3(0.1, 0.1, 0.1);
-    vec3 lightPos = vec3(1.0, -1.0, 1.0);
-    float uWrap = 0.1;
-
-    vec3 L = normalize(lightPos);
-    vec3 N = normalize(vNormal);
-    float NdotL = max(0.0, (dot(N, L) + uWrap) / (1.0 + uWrap));
-    vec3 ambient = toLinear(ambientColor.rgb);
-    vec3 diffuse = toLinear(vColor.rgb);
-
-    gl_FragColor = vec4(toGamma(ambient + NdotL * diffuse), 1.0);
-  }
-
-  if (uMode == 2.0) {
-    vec3 fdx = vec3(dFdx(vPositionWorld.x), dFdx(vPositionWorld.y), dFdx(vPositionWorld.z));
-    vec3 fdy = vec3(dFdy(vPositionWorld.x), dFdy(vPositionWorld.y), dFdy(vPositionWorld.z));
-    vec3 normal = normalize(cross(fdx, fdy));
-    gl_FragColor = vec4(normal * 0.5 + 0.5, 1.0);
-  }
-
-  if (uMode == 3.0) gl_FragColor = vec4(vUv.xy, 0.0, 1.0);
-}
-    `,
-  }),
-  uniforms: {
-    uProjectionMatrix: camera.projectionMatrix,
-    uViewMatrix: camera.viewMatrix,
-    uModelMatrix: modelMatrix,
-    uMode: 2,
-  },
-};
-
-const drawLine = {
-  pipeline: ctx.pipeline({
-    depthTest: true,
-    vert: /* glsl */ `
-attribute vec3 aPosition;
-attribute vec4 aColor;
-
-uniform mat4 uProjectionMatrix;
-uniform mat4 uViewMatrix;
-uniform mat4 uModelMatrix;
-
-varying vec4 vColor;
-
-void main () {
-  vColor = aColor;
-  mat4 modelViewMatrix = uViewMatrix * uModelMatrix;
-  gl_Position = uProjectionMatrix * modelViewMatrix * vec4(aPosition, 1.0);
-}`,
-    frag: /* glsl */ `
-precision highp float;
-
-varying vec4 vColor;
-
-void main () {
-  gl_FragColor.rgb = vColor.rgb;
-  gl_FragColor.a = 1.0;
-}`,
-    primitive: ctx.Primitive.Lines,
-  }),
-  uniforms: {
-    uProjectionMatrix: camera.projectionMatrix,
-    uViewMatrix: camera.viewMatrix,
-    uInvViewMatrix: camera.invViewMatrix,
-    uModelMatrix: mat4.create(),
-  },
-};
-
-const clearCmd = {
-  pass: ctx.pass({
-    clearColor: [0.2, 0.2, 0.2, 1],
-    clearDepth: 1,
-  }),
-};
-
-ctx.frame(() => {
-  ctx.submit(clearCmd);
-  ctx.submit(drawMesh, {
-    ...cmdOptions,
-    uniforms: {
-      uMode: State.mode,
-    },
-  });
-  if (State.frames[State.frame] !== "none") {
-    ctx.submit(drawLine, cmdLineOptions);
-  }
-
-  gui.draw();
+window.addEventListener("resize", () => {
+  gpu.resize(ctx, window.innerWidth, window.innerHeight);
 });
 
-window.addEventListener("keydown", ({ key }) => {
+addEventListener("keydown", ({ key }) => {
   if (key === "g") gui.enabled = !gui.enabled;
+});
+
+gpu.frame(ctx, () => {
+  mat4.perspectiveZO(
+    projection,
+    camera.fov,
+    ctx.width / ctx.height,
+    camera.near,
+    camera.far,
+  );
+  drawMesh.uniforms.mode = State.mode;
+
+  gpu.submit(ctx, { pass }, () => {
+    gpu.submit(ctx, drawMesh);
+    if (State.wireframe) gpu.submit(ctx, drawWireframe);
+    if (State.frames[State.frame] !== "none") gpu.submit(ctx, drawFrames);
+    gui.draw();
+  });
 });
